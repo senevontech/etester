@@ -12,6 +12,7 @@ import TestRoom from './pages/TestRoom';
 import AdminDashboard from './pages/admin/AdminDashboard';
 import TestEditor from './pages/admin/TestEditor';
 import AdminTestResults from './pages/admin/AdminTestResults';
+import AdminStudents from './pages/admin/AdminStudents';
 import Login from './pages/auth/Login';
 import Signup from './pages/auth/Signup';
 import OrgSetup from './pages/auth/OrgSetup';
@@ -89,6 +90,14 @@ function App() {
                                         element={
                                             <ProtectedRoute requiredRole="admin">
                                                 <AdminTestResults />
+                                            </ProtectedRoute>
+                                        }
+                                    />
+                                    <Route
+                                        path="/admin/students"
+                                        element={
+                                            <ProtectedRoute requiredRole="admin">
+                                                <AdminStudents />
                                             </ProtectedRoute>
                                         }
                                     />

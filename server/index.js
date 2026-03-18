@@ -781,7 +781,7 @@ const handleRequest = async (req, res) => {
 
     match = pathname.match(/^\/api\/tests\/([^/]+)\/attempts$/);
     if (req.method === 'POST' && match) {
-        enforceRateLimit(req, 'attempt-start', { limit: 10, windowMs: 15 * 60 * 1000 });
+        enforceRateLimit(req, 'attempt-start', { limit: Number(process.env.ATTEMPT_START_RATE_LIMIT || 60), windowMs: 15 * 60 * 1000 });
         const { user } = await requireAuth(req);
         const testId = decodeURIComponent(match[1]);
         const test = await getTestOrThrow(testId);
@@ -809,7 +809,7 @@ const handleRequest = async (req, res) => {
                 throw new HttpError(409, 'This test has already been submitted.');
             }
 
-            throw new HttpError(409, 'This attempt is already closed and cannot be restarted.');
+            // Expired or abandoned — allow the student to start a fresh attempt
         }
 
         const startedAt = now();

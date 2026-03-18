@@ -42,8 +42,9 @@ export interface Test {
 export interface AnswerPayload {
     questionId: string;
     type: 'mcq' | 'code';
-    choice?: number; // for MCQ
-    code?: string;   // for Code
+    choice?: number;    // for MCQ
+    code?: string;      // for Code
+    language?: string;  // for Code
     pointsEarned: number;
 }
 

@@ -4,21 +4,33 @@ import TestCard from '../components/Cards/TestCard';
 import { Search, SlidersHorizontal, ShieldCheck, BarChart2, Award, Shield } from 'lucide-react';
 import { useTests } from '../context/TestContext';
 import { useOrg } from '../context/OrgContext';
+import { useResults } from '../context/ResultContext';
+import { useAuth } from '../context/AuthContext';
 import { Difficulty } from '../types';
 
 type Filter = 'All' | Difficulty;
 
-const STATS = [
-    { icon: ShieldCheck, label: 'Integrity Score', value: '99.8%', sub: 'All time' },
-    { icon: Award, label: 'Rank Points', value: '2,840', sub: '+12% this month' },
-    { icon: BarChart2, label: 'Completed', value: '18', sub: 'Assessments' },
-];
-
 const Dashboard: React.FC = () => {
     const { tests } = useTests();
     const { activeOrg } = useOrg();
+    const { user } = useAuth();
+    const { getStudentSubmissions } = useResults();
     const [search, setSearch] = useState('');
     const [filter, setFilter] = useState<Filter>('All');
+
+    const mySubmissions = user ? getStudentSubmissions(user.id) : [];
+    const avgScore = mySubmissions.length > 0
+        ? mySubmissions.reduce((a, b) => a + (b.totalPoints > 0 ? (b.score / b.totalPoints) * 100 : 0), 0) / mySubmissions.length
+        : 0;
+    const avgIntegrity = mySubmissions.length > 0
+        ? mySubmissions.reduce((a, b) => a + b.integrityScore, 0) / mySubmissions.length
+        : 0;
+
+    const STATS = [
+        { icon: ShieldCheck, label: 'Avg Integrity', value: mySubmissions.length ? `${Math.round(avgIntegrity)}%` : '—', sub: 'All time' },
+        { icon: Award, label: 'Avg Score', value: mySubmissions.length ? `${avgScore.toFixed(0)}%` : '—', sub: 'Across tests' },
+        { icon: BarChart2, label: 'Completed', value: String(mySubmissions.length), sub: 'Assessments' },
+    ];
 
     // Only show published tests on the student dashboard
     const published = tests.filter(t => t.published);

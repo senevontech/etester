@@ -42,7 +42,7 @@ const TestRoom: React.FC = () => {
     const { submitTest } = useResults();
 
     const test = getTest(testId ?? '');
-    const { violations } = useProctoring(true);
+    const { violations, isFullscreen, tabSwitchCount, fullscreenExitCount, enterFullscreen } = useProctoring(true);
 
     const [idx, setIdx] = useState(0);
     const [timeLeft, setTimeLeft] = useState<number | null>(null);
@@ -56,11 +56,19 @@ const TestRoom: React.FC = () => {
     const [executing, setExecuting] = useState(false);
     const [answers, setAnswers] = useState<Record<string, AnswerPayload>>({});
     const [currentLang, setCurrentLang] = useState<string>('typescript');
+    const [fullscreenReady, setFullscreenReady] = useState(false);
+    const [showFsWarning, setShowFsWarning] = useState(false);
+    const [showTabWarning, setShowTabWarning] = useState(false);
 
     const q = test?.questions[idx];
     const total = test?.questions.length ?? 0;
     const recordedViolationCount = Math.max(violations.length, syncedViolationsCount);
     const integrityScore = Math.max(0, 100 - recordedViolationCount * 5);
+
+    // Enter fullscreen → unlock the test gate
+    useEffect(() => {
+        if (isFullscreen && !fullscreenReady) setFullscreenReady(true);
+    }, [isFullscreen, fullscreenReady]);
 
     useEffect(() => {
         if (q && q.type === 'code') {
@@ -91,6 +99,7 @@ const TestRoom: React.FC = () => {
             } catch (error) {
                 if (cancelled) return;
                 setAttemptId('');
+                setTimeLeft(0);
                 setSubmitError(error instanceof Error ? error.message : 'Failed to start test attempt.');
             } finally {
                 if (!cancelled) setAttemptLoading(false);
@@ -283,6 +292,37 @@ const TestRoom: React.FC = () => {
 
         setTimeout(() => navigate('/progress'), 2200);
     };
+
+    // Stable ref so enforcement effects always call the latest submit
+    const submitRef = React.useRef(submit);
+    useEffect(() => { submitRef.current = submit; });
+
+    // Fullscreen exit enforcement: warn on 1st, auto-submit on 2nd
+    useEffect(() => {
+        if (fullscreenExitCount === 0) return;
+        if (fullscreenExitCount === 1) {
+            setShowFsWarning(true);
+        } else {
+            void submitRef.current();
+        }
+    }, [fullscreenExitCount]);
+
+    // Dismiss fullscreen warning once they re-enter
+    useEffect(() => {
+        if (isFullscreen) setShowFsWarning(false);
+    }, [isFullscreen]);
+
+    // Tab-switch enforcement: warn on 1st, auto-submit on 2nd
+    useEffect(() => {
+        if (tabSwitchCount === 0) return;
+        if (tabSwitchCount === 1) {
+            setShowTabWarning(true);
+            const t = setTimeout(() => setShowTabWarning(false), 6000);
+            return () => clearTimeout(t);
+        } else {
+            void submitRef.current();
+        }
+    }, [tabSwitchCount]);
 
     if (!test || !user) return (
         <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', flexDirection: 'column', gap: '1rem' }}>

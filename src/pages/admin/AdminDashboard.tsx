@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Edit2, Trash2, Globe, EyeOff, BarChart2, BookOpen, Clock, ChevronRight, Shield, Copy, Check, Users } from 'lucide-react';
+import { Plus, Edit2, Trash2, Globe, EyeOff, BarChart2, BookOpen, Clock, ChevronRight, Shield, Copy, Check, Users, Table2 } from 'lucide-react';
 import Navbar from '../../components/Layout/Navbar';
 import { useTests } from '../../context/TestContext';
 import { useOrg } from '../../context/OrgContext';
@@ -154,9 +154,14 @@ const AdminDashboard: React.FC = () => {
                         </div>
                         <h1 className="t-h1">Assessments</h1>
                     </div>
-                    <button className="btn btn-md btn-primary hover-glow" style={{ gap: '0.5rem' }} onClick={() => setShowCreate(true)}>
-                        <Plus size={16} /> New Assessment
-                    </button>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button className="btn btn-md btn-outline" style={{ gap: '0.5rem' }} onClick={() => navigate('/admin/students')}>
+                            <Table2 size={15} /> Students
+                        </button>
+                        <button className="btn btn-md btn-primary hover-glow" style={{ gap: '0.5rem' }} onClick={() => setShowCreate(true)}>
+                            <Plus size={16} /> New Assessment
+                        </button>
+                    </div>
                 </div>
 
                 {/* Invite Code Banner */}

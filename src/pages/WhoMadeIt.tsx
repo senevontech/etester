@@ -10,14 +10,14 @@ const developers = [
     },
     {
         name: 'Dibbapriya Jana',
-        email: 'dj@gmail.com',
-        role: 'Backend Developer',
+        email: 'janad21044@gmail.com',
+        role: 'Fullstack Developer',
         initials: 'D',
         delay: 120,
     },
     {
         name: 'Santu Pramanik',
-        email: 'santupramanik@gmail.com',
+        email: 'santupramanik2003@gmail.com',
         role: 'Backend Developer',
         initials: 'S',
         delay: 240,
@@ -77,7 +77,7 @@ const WhoMadeIt: React.FC = () => {
                 zIndex: 0,
             }} />
 
-            <div style={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: '900px', textAlign: 'center' }}>
+            <div style={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: '1100px', textAlign: 'center' }}>
 
                 {/* Kicker badge */}
                 <div style={{
@@ -264,10 +264,12 @@ const DevCard: React.FC<DevCardProps> = ({ dev, visible }) => (
 
         {/* Email */}
         <p className="t-mono" style={{
-            fontSize: '0.8rem',
+            fontSize: '0.75rem',
             color: 'var(--text-muted)',
             letterSpacing: '0.01em',
-            wordBreak: 'break-all',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
         }}>
             {dev.email}
         </p>
