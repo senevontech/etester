@@ -9,7 +9,7 @@ const Home: React.FC = () => {
 
     return (
         <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-            <Navbar />
+            <Navbar overlay />
 
             {/* Hero */}
             <section className="home-hero">

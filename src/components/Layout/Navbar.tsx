@@ -7,9 +7,10 @@ import { useOrg } from '../../context/OrgContext';
 
 interface NavbarProps {
     activeTab?: 'dashboard' | 'progress' | 'faq';
+    overlay?: boolean;
 }
 
-const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard' }) => {
+const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard', overlay = false }) => {
     const { theme, toggle } = useTheme();
     const { user, logout, isAuthenticated } = useAuth();
     const { activeOrg, userOrgs, switchOrg } = useOrg();
@@ -30,7 +31,8 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard' }) => {
     };
 
     return (
-        <header style={{ position: 'sticky', top: 0, zIndex: 100, background: 'var(--bg)', borderBottom: '1px solid var(--border)', transition: 'background 0.25s ease' }}>
+        <>
+        <header style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, background: 'color-mix(in srgb, var(--bg) 20%, transparent)', backdropFilter: 'blur(20px) saturate(180%)', WebkitBackdropFilter: 'blur(20px) saturate(180%)', borderBottom: '1px solid color-mix(in srgb, var(--border) 40%, transparent)', transition: 'background 0.25s ease' }}>
             <div className="container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '56px' }}>
                 {/* Logo */}
                 <Link to={isAuthenticated ? (user?.role === 'admin' ? '/admin' : '/dashboard') : '/'} style={{ display: 'flex', alignItems: 'center', textDecoration: 'none', flexShrink: 0 }}>
@@ -213,6 +215,8 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard' }) => {
         @media (max-width: 767px) { .desktop-nav { display: none !important; } .desktop-only { display: none !important; } }
       `}</style>
         </header>
+        {!overlay && <div style={{ height: '56px', flexShrink: 0 }} aria-hidden="true" />}
+        </>
     );
 };
 
