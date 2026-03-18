@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Shield, Moon, Sun, Menu, X, ShieldAlert, LogOut, ChevronDown } from 'lucide-react';
+import { Moon, Sun, Menu, X, ShieldAlert, LogOut, ChevronDown } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useOrg } from '../../context/OrgContext';
@@ -33,11 +33,12 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard' }) => {
         <header style={{ position: 'sticky', top: 0, zIndex: 100, background: 'var(--bg)', borderBottom: '1px solid var(--border)', transition: 'background 0.25s ease' }}>
             <div className="container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '56px' }}>
                 {/* Logo */}
-                <Link to={isAuthenticated ? (user?.role === 'admin' ? '/admin' : '/dashboard') : '/'} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', textDecoration: 'none' }}>
-                    <div style={{ width: '28px', height: '28px', background: 'var(--accent)', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                        <Shield size={15} color="var(--accent-fg)" strokeWidth={2.5} />
-                    </div>
-                    <span style={{ fontWeight: 900, fontSize: '1rem', letterSpacing: '-0.03em', color: 'var(--text)' }}>Etester</span>
+                <Link to={isAuthenticated ? (user?.role === 'admin' ? '/admin' : '/dashboard') : '/'} style={{ display: 'flex', alignItems: 'center', textDecoration: 'none', flexShrink: 0 }}>
+                    <img
+                        src="/logo.png"
+                        alt="Etester"
+                        style={{ height: '32px', width: 'auto', maxWidth: '140px', objectFit: 'contain', display: 'block' }}
+                    />
                 </Link>
 
                 {/* Desktop Nav */}
