@@ -111,6 +111,48 @@ const parseBody = async (req) => {
     }
 };
 
+const getRequestIp = (req) => {
+    const forwarded = typeof req.headers['x-forwarded-for'] === 'string'
+        ? req.headers['x-forwarded-for']
+        : Array.isArray(req.headers['x-forwarded-for'])
+            ? req.headers['x-forwarded-for'][0]
+            : '';
+    const ip = (forwarded || req.socket.remoteAddress || '').split(',')[0].trim();
+    return ip ? ip.slice(0, 128) : null;
+};
+
+const sanitizeAuditMetadata = (value, depth = 0) => {
+    if (depth > 4) return '[truncated]';
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'string') return value.slice(0, 500);
+    if (typeof value === 'number' || typeof value === 'boolean') return value;
+    if (Array.isArray(value)) return value.slice(0, 20).map((item) => sanitizeAuditMetadata(item, depth + 1));
+    if (typeof value === 'object') {
+        const entries = Object.entries(value).slice(0, 20).map(([key, item]) => [key, sanitizeAuditMetadata(item, depth + 1)]);
+        return Object.fromEntries(entries);
+    }
+    return String(value).slice(0, 500);
+};
+
+const insertAuditLog = async (client, entry) => {
+    await client.query(`
+        INSERT INTO audit_logs (
+            id, org_id, actor_user_id, action, entity_type, entity_id, metadata, ip_address, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+    `, [
+        randomUUID(),
+        entry.orgId ?? null,
+        entry.actorUserId ?? null,
+        String(entry.action || '').slice(0, 120),
+        String(entry.entityType || '').slice(0, 120),
+        entry.entityId ? String(entry.entityId).slice(0, 120) : null,
+        JSON.stringify(sanitizeAuditMetadata(entry.metadata ?? {})),
+        entry.ipAddress ? String(entry.ipAddress).slice(0, 128) : null,
+        now(),
+    ]);
+};
+
 const hashPassword = (password) => {
     const salt = randomBytes(16).toString('hex');
     const hash = pbkdf2Sync(password, salt, 310000, 32, 'sha256').toString('hex');
@@ -212,6 +254,12 @@ const mapSubmissionRow = (row) => ({
     answers: row.answers ?? [],
     integrity_events: row.integrity_events ?? [],
     submitted_at: row.submitted_at instanceof Date ? row.submitted_at.toISOString() : row.submitted_at,
+});
+
+const mapAuditLogRow = (row) => ({
+    ...row,
+    metadata: row.metadata ?? {},
+    created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
 });
 
 const mapAttemptRow = (row) => ({
@@ -631,6 +679,7 @@ const handleRequest = async (req, res) => {
         const { user } = await requireAuth(req);
         const name = String(body.name || '').trim();
         if (!name) throw new HttpError(400, 'Organization name is required.');
+        const requestIp = getRequestIp(req);
 
         const org = await transaction(async (client) => {
             const id = randomUUID();
@@ -649,6 +698,16 @@ const handleRequest = async (req, res) => {
                 VALUES ($1, $2, $3, 'admin', $4)
             `, [randomUUID(), id, user.id, createdAt]);
 
+            await insertAuditLog(client, {
+                orgId: id,
+                actorUserId: user.id,
+                action: 'org.created',
+                entityType: 'organization',
+                entityId: id,
+                metadata: { name, slug },
+                ipAddress: requestIp,
+            });
+
             return orgResult.rows[0];
         });
 
@@ -661,6 +720,7 @@ const handleRequest = async (req, res) => {
     if (req.method === 'POST' && pathname === '/api/orgs/join') {
         const { user } = await requireAuth(req);
         const code = String(body.code || '').trim().toLowerCase();
+        const requestIp = getRequestIp(req);
 
         const org = await transaction(async (client) => {
             const orgResult = await client.query('SELECT * FROM organizations WHERE LOWER(invite_code) = $1 LIMIT 1', [code]);
@@ -677,6 +737,16 @@ const handleRequest = async (req, res) => {
                 INSERT INTO org_members (id, org_id, user_id, role, joined_at)
                 VALUES ($1, $2, $3, 'student', $4)
             `, [randomUUID(), orgRow.id, user.id, now()]);
+
+            await insertAuditLog(client, {
+                orgId: orgRow.id,
+                actorUserId: user.id,
+                action: 'org.joined',
+                entityType: 'organization',
+                entityId: orgRow.id,
+                metadata: { role: 'student', organizationName: orgRow.name },
+                ipAddress: requestIp,
+            });
 
             return orgRow;
         });
@@ -732,11 +802,48 @@ const handleRequest = async (req, res) => {
         return;
     }
 
+    match = pathname.match(/^\/api\/orgs\/([^/]+)\/audit-logs$/);
+    if (req.method === 'GET' && match) {
+        const { user } = await requireAuth(req);
+        const orgId = decodeURIComponent(match[1]);
+        await requireAdmin(user.id, orgId);
+        const requestedLimit = Number(url.searchParams.get('limit') || 25);
+        const limit = Math.max(1, Math.min(requestedLimit, 100));
+
+        const { rows } = await query(`
+            SELECT
+                a.*,
+                u.name AS actor_name,
+                u.email AS actor_email
+            FROM audit_logs a
+            LEFT JOIN users u ON u.id = a.actor_user_id
+            WHERE a.org_id = $1
+            ORDER BY a.created_at DESC
+            LIMIT $2
+        `, [orgId, limit]);
+
+        sendJson(req, res, 200, {
+            logs: rows.map((row) => {
+                const log = mapAuditLogRow(row);
+                return {
+                    ...log,
+                    actor: row.actor_user_id ? {
+                        id: row.actor_user_id,
+                        name: row.actor_name,
+                        email: row.actor_email,
+                    } : null,
+                };
+            }),
+        });
+        return;
+    }
+
     match = pathname.match(/^\/api\/orgs\/([^/]+)\/invite-code\/regenerate$/);
     if (req.method === 'POST' && match) {
         const { user } = await requireAuth(req);
         const orgId = decodeURIComponent(match[1]);
         await requireAdmin(user.id, orgId);
+        const requestIp = getRequestIp(req);
 
         const org = await transaction(async (client) => {
             const inviteCode = await uniqueInviteCode(client);
@@ -747,6 +854,17 @@ const handleRequest = async (req, res) => {
                 RETURNING *
             `, [inviteCode, orgId]);
             if (result.rowCount === 0) throw new HttpError(404, 'Organization not found.');
+
+            await insertAuditLog(client, {
+                orgId,
+                actorUserId: user.id,
+                action: 'org.invite_code_regenerated',
+                entityType: 'organization',
+                entityId: orgId,
+                metadata: { organizationName: result.rows[0].name },
+                ipAddress: requestIp,
+            });
+
             return result.rows[0];
         });
 
@@ -788,6 +906,7 @@ const handleRequest = async (req, res) => {
         const membership = await requireMembership(user.id, test.org_id);
         if (membership.role !== 'student') throw new HttpError(403, 'Only students can start test attempts.');
         if (!test.published) throw new HttpError(403, 'Only published tests can be attempted.');
+        const requestIp = getRequestIp(req);
 
         const latestAttemptResult = await query(`
             SELECT *
@@ -814,23 +933,38 @@ const handleRequest = async (req, res) => {
 
         const startedAt = now();
         const expiresAt = new Date(Date.now() + Math.max(1, Number(test.duration || 60)) * 60 * 1000).toISOString();
-        const { rows } = await query(`
-            INSERT INTO test_attempts (
-                id, test_id, org_id, student_id, status,
-                started_at, last_heartbeat_at, expires_at, violations_count, integrity_events
-            )
-            VALUES ($1, $2, $3, $4, 'active', $5, $5, $6, 0, '[]'::jsonb)
-            RETURNING *
-        `, [
-            randomUUID(),
-            testId,
-            test.org_id,
-            user.id,
-            startedAt,
-            expiresAt,
-        ]);
+        const attempt = await transaction(async (client) => {
+            const attemptId = randomUUID();
+            const result = await client.query(`
+                INSERT INTO test_attempts (
+                    id, test_id, org_id, student_id, status,
+                    started_at, last_heartbeat_at, expires_at, violations_count, integrity_events
+                )
+                VALUES ($1, $2, $3, $4, 'active', $5, $5, $6, 0, '[]'::jsonb)
+                RETURNING *
+            `, [
+                attemptId,
+                testId,
+                test.org_id,
+                user.id,
+                startedAt,
+                expiresAt,
+            ]);
 
-        sendJson(req, res, 201, { attempt: mapAttemptRow(rows[0]) });
+            await insertAuditLog(client, {
+                orgId: test.org_id,
+                actorUserId: user.id,
+                action: 'attempt.started',
+                entityType: 'attempt',
+                entityId: attemptId,
+                metadata: { testId, testTitle: test.title, expiresAt },
+                ipAddress: requestIp,
+            });
+
+            return result.rows[0];
+        });
+
+        sendJson(req, res, 201, { attempt: mapAttemptRow(attempt) });
         return;
     }
 
@@ -838,27 +972,48 @@ const handleRequest = async (req, res) => {
         const { user } = await requireAuth(req);
         const orgId = String(body.orgId || '');
         await requireAdmin(user.id, orgId);
+        const requestIp = getRequestIp(req);
 
         const title = String(body.title || '').trim();
         if (!title) throw new HttpError(400, 'Test title is required.');
 
-        const { rows } = await query(`
-            INSERT INTO tests (id, org_id, title, description, duration, difficulty, tags, published, created_by, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, FALSE, $8, $9)
-            RETURNING *
-        `, [
-            randomUUID(),
-            orgId,
-            title,
-            String(body.description || ''),
-            Number(body.duration || 60),
-            ['Easy', 'Medium', 'Hard'].includes(body.difficulty) ? body.difficulty : 'Medium',
-            JSON.stringify(Array.isArray(body.tags) ? body.tags : []),
-            user.id,
-            now(),
-        ]);
+        const testId = randomUUID();
+        const description = String(body.description || '');
+        const duration = Number(body.duration || 60);
+        const difficulty = ['Easy', 'Medium', 'Hard'].includes(body.difficulty) ? body.difficulty : 'Medium';
+        const tags = Array.isArray(body.tags) ? body.tags : [];
 
-        sendJson(req, res, 201, { test: mapTestRow(rows[0], []) });
+        const createdTest = await transaction(async (client) => {
+            const result = await client.query(`
+                INSERT INTO tests (id, org_id, title, description, duration, difficulty, tags, published, created_by, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, FALSE, $8, $9)
+                RETURNING *
+            `, [
+                testId,
+                orgId,
+                title,
+                description,
+                duration,
+                difficulty,
+                JSON.stringify(tags),
+                user.id,
+                now(),
+            ]);
+
+            await insertAuditLog(client, {
+                orgId,
+                actorUserId: user.id,
+                action: 'test.created',
+                entityType: 'test',
+                entityId: testId,
+                metadata: { title, duration, difficulty, tags },
+                ipAddress: requestIp,
+            });
+
+            return result.rows[0];
+        });
+
+        sendJson(req, res, 201, { test: mapTestRow(createdTest, []) });
         return;
     }
 
@@ -873,36 +1028,75 @@ const handleRequest = async (req, res) => {
             if (body.published === true) {
                 await assertTestReadyForPublish(testId);
             }
+            const requestIp = getRequestIp(req);
 
-            const { rows } = await query(`
-                UPDATE tests
-                SET
-                    title = COALESCE($1, title),
-                    description = COALESCE($2, description),
-                    duration = COALESCE($3, duration),
-                    difficulty = COALESCE($4, difficulty),
-                    tags = COALESCE($5::jsonb, tags),
-                    published = COALESCE($6, published)
-                WHERE id = $7
-                RETURNING *
-            `, [
-                body.title !== undefined ? String(body.title).trim() : null,
-                body.description !== undefined ? String(body.description) : null,
-                body.duration !== undefined ? Number(body.duration) : null,
-                body.difficulty !== undefined ? body.difficulty : null,
-                body.tags !== undefined ? JSON.stringify(Array.isArray(body.tags) ? body.tags : []) : null,
-                body.published !== undefined ? Boolean(body.published) : null,
-                testId,
-            ]);
+            const updatedTest = await transaction(async (client) => {
+                const result = await client.query(`
+                    UPDATE tests
+                    SET
+                        title = COALESCE($1, title),
+                        description = COALESCE($2, description),
+                        duration = COALESCE($3, duration),
+                        difficulty = COALESCE($4, difficulty),
+                        tags = COALESCE($5::jsonb, tags),
+                        published = COALESCE($6, published)
+                    WHERE id = $7
+                    RETURNING *
+                `, [
+                    body.title !== undefined ? String(body.title).trim() : null,
+                    body.description !== undefined ? String(body.description) : null,
+                    body.duration !== undefined ? Number(body.duration) : null,
+                    body.difficulty !== undefined ? body.difficulty : null,
+                    body.tags !== undefined ? JSON.stringify(Array.isArray(body.tags) ? body.tags : []) : null,
+                    body.published !== undefined ? Boolean(body.published) : null,
+                    testId,
+                ]);
+
+                const nextTest = result.rows[0];
+                const action = body.published === true && !test.published
+                    ? 'test.published'
+                    : body.published === false && test.published
+                        ? 'test.unpublished'
+                        : 'test.updated';
+
+                await insertAuditLog(client, {
+                    orgId: test.org_id,
+                    actorUserId: user.id,
+                    action,
+                    entityType: 'test',
+                    entityId: testId,
+                    metadata: {
+                        title: nextTest.title,
+                        published: nextTest.published,
+                        duration: nextTest.duration,
+                        difficulty: nextTest.difficulty,
+                    },
+                    ipAddress: requestIp,
+                });
+
+                return nextTest;
+            });
 
             const questionRows = await fetchQuestionsByTestIds([testId]);
-            sendJson(req, res, 200, { test: mapTestRow(rows[0], questionRows) });
+            sendJson(req, res, 200, { test: mapTestRow(updatedTest, questionRows) });
             return;
         }
 
         if (req.method === 'DELETE') {
             await requireAdmin(user.id, test.org_id);
-            await query('DELETE FROM tests WHERE id = $1', [testId]);
+            const requestIp = getRequestIp(req);
+            await transaction(async (client) => {
+                await insertAuditLog(client, {
+                    orgId: test.org_id,
+                    actorUserId: user.id,
+                    action: 'test.deleted',
+                    entityType: 'test',
+                    entityId: testId,
+                    metadata: { title: test.title, published: test.published },
+                    ipAddress: requestIp,
+                });
+                await client.query('DELETE FROM tests WHERE id = $1', [testId]);
+            });
             sendJson(req, res, 200, { success: true });
             return;
         }
@@ -914,39 +1108,54 @@ const handleRequest = async (req, res) => {
         const testId = decodeURIComponent(match[1]);
         const test = await getTestOrThrow(testId);
         await requireAdmin(user.id, test.org_id);
+        const requestIp = getRequestIp(req);
 
         const positionResult = await query('SELECT COUNT(*)::int AS count FROM questions WHERE test_id = $1', [testId]);
         const question = normalizeQuestionInput({ ...body, testId }, positionResult.rows[0].count);
 
-        const { rows } = await query(`
-            INSERT INTO questions (
-                id, test_id, type, title, description, points, position,
-                options, answer, template, language, constraints, examples, test_cases, created_at
-            )
-            VALUES (
-                $1, $2, $3, $4, $5, $6, $7,
-                $8::jsonb, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15
-            )
-            RETURNING *
-        `, [
-            question.id,
-            question.test_id,
-            question.type,
-            question.title,
-            question.description,
-            question.points,
-            question.position,
-            question.options,
-            question.answer,
-            question.template,
-            question.language,
-            question.constraints,
-            question.examples,
-            question.test_cases,
-            question.created_at,
-        ]);
+        const createdQuestion = await transaction(async (client) => {
+            const result = await client.query(`
+                INSERT INTO questions (
+                    id, test_id, type, title, description, points, position,
+                    options, answer, template, language, constraints, examples, test_cases, created_at
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7,
+                    $8::jsonb, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15
+                )
+                RETURNING *
+            `, [
+                question.id,
+                question.test_id,
+                question.type,
+                question.title,
+                question.description,
+                question.points,
+                question.position,
+                question.options,
+                question.answer,
+                question.template,
+                question.language,
+                question.constraints,
+                question.examples,
+                question.test_cases,
+                question.created_at,
+            ]);
 
-        sendJson(req, res, 201, { question: mapQuestionRow(rows[0]) });
+            await insertAuditLog(client, {
+                orgId: test.org_id,
+                actorUserId: user.id,
+                action: 'question.created',
+                entityType: 'question',
+                entityId: question.id,
+                metadata: { testId, title: question.title, type: question.type, points: question.points },
+                ipAddress: requestIp,
+            });
+
+            return result.rows[0];
+        });
+
+        sendJson(req, res, 201, { question: mapQuestionRow(createdQuestion) });
         return;
     }
 
@@ -956,12 +1165,23 @@ const handleRequest = async (req, res) => {
         const testId = decodeURIComponent(match[1]);
         const test = await getTestOrThrow(testId);
         await requireAdmin(user.id, test.org_id);
+        const requestIp = getRequestIp(req);
 
         const questionIds = Array.isArray(body.questionIds) ? body.questionIds : [];
         await transaction(async (client) => {
             for (const [index, questionId] of questionIds.entries()) {
                 await client.query('UPDATE questions SET position = $1 WHERE id = $2 AND test_id = $3', [index, questionId, testId]);
             }
+
+            await insertAuditLog(client, {
+                orgId: test.org_id,
+                actorUserId: user.id,
+                action: 'question.reordered',
+                entityType: 'test',
+                entityId: testId,
+                metadata: { questionIds },
+                ipAddress: requestIp,
+            });
         });
 
         const { rows } = await query('SELECT * FROM questions WHERE test_id = $1 ORDER BY position ASC', [testId]);
@@ -1072,47 +1292,71 @@ const handleRequest = async (req, res) => {
         const question = await getQuestionOrThrow(questionId);
         const test = await getTestOrThrow(question.test_id);
         await requireAdmin(user.id, test.org_id);
+        const requestIp = getRequestIp(req);
 
         if (req.method === 'PATCH') {
-            const { rows } = await query(`
-                UPDATE questions
-                SET
-                    title = COALESCE($1, title),
-                    description = COALESCE($2, description),
-                    points = COALESCE($3, points),
-                    options = CASE WHEN $4::jsonb IS NULL THEN options ELSE $4::jsonb END,
-                    answer = COALESCE($5, answer),
-                    template = COALESCE($6, template),
-                    language = COALESCE($7, language),
-                    constraints = CASE WHEN $8::jsonb IS NULL THEN constraints ELSE $8::jsonb END,
-                    examples = CASE WHEN $9::jsonb IS NULL THEN examples ELSE $9::jsonb END,
-                    test_cases = CASE WHEN $10::jsonb IS NULL THEN test_cases ELSE $10::jsonb END
-                WHERE id = $11
-                RETURNING *
-            `, [
-                body.title !== undefined ? String(body.title).trim() : null,
-                body.description !== undefined ? String(body.description) : null,
-                body.points !== undefined ? Number(body.points) : null,
-                body.options !== undefined ? JSON.stringify(Array.isArray(body.options) ? body.options : []) : null,
-                body.answer !== undefined ? Number(body.answer) : null,
-                body.template !== undefined ? String(body.template) : null,
-                body.language !== undefined ? String(body.language) : null,
-                body.constraints !== undefined ? JSON.stringify(Array.isArray(body.constraints) ? body.constraints : []) : null,
-                body.examples !== undefined ? JSON.stringify(Array.isArray(body.examples) ? body.examples : []) : null,
-                body.test_cases !== undefined || body.testCases !== undefined
-                    ? JSON.stringify(normalizeCodeTestCases(body.test_cases ?? body.testCases))
-                    : null,
-                questionId,
-            ]);
+            const updatedQuestion = await transaction(async (client) => {
+                const result = await client.query(`
+                    UPDATE questions
+                    SET
+                        title = COALESCE($1, title),
+                        description = COALESCE($2, description),
+                        points = COALESCE($3, points),
+                        options = CASE WHEN $4::jsonb IS NULL THEN options ELSE $4::jsonb END,
+                        answer = COALESCE($5, answer),
+                        template = COALESCE($6, template),
+                        language = COALESCE($7, language),
+                        constraints = CASE WHEN $8::jsonb IS NULL THEN constraints ELSE $8::jsonb END,
+                        examples = CASE WHEN $9::jsonb IS NULL THEN examples ELSE $9::jsonb END,
+                        test_cases = CASE WHEN $10::jsonb IS NULL THEN test_cases ELSE $10::jsonb END
+                    WHERE id = $11
+                    RETURNING *
+                `, [
+                    body.title !== undefined ? String(body.title).trim() : null,
+                    body.description !== undefined ? String(body.description) : null,
+                    body.points !== undefined ? Number(body.points) : null,
+                    body.options !== undefined ? JSON.stringify(Array.isArray(body.options) ? body.options : []) : null,
+                    body.answer !== undefined ? Number(body.answer) : null,
+                    body.template !== undefined ? String(body.template) : null,
+                    body.language !== undefined ? String(body.language) : null,
+                    body.constraints !== undefined ? JSON.stringify(Array.isArray(body.constraints) ? body.constraints : []) : null,
+                    body.examples !== undefined ? JSON.stringify(Array.isArray(body.examples) ? body.examples : []) : null,
+                    body.test_cases !== undefined || body.testCases !== undefined
+                        ? JSON.stringify(normalizeCodeTestCases(body.test_cases ?? body.testCases))
+                        : null,
+                    questionId,
+                ]);
 
-            sendJson(req, res, 200, { question: mapQuestionRow(rows[0]) });
+                await insertAuditLog(client, {
+                    orgId: test.org_id,
+                    actorUserId: user.id,
+                    action: 'question.updated',
+                    entityType: 'question',
+                    entityId: questionId,
+                    metadata: { testId: test.id, title: result.rows[0].title, type: result.rows[0].type, points: result.rows[0].points },
+                    ipAddress: requestIp,
+                });
+
+                return result.rows[0];
+            });
+
+            sendJson(req, res, 200, { question: mapQuestionRow(updatedQuestion) });
             return;
         }
 
         if (req.method === 'DELETE') {
-            await query('DELETE FROM questions WHERE id = $1', [questionId]);
-            const remaining = await query('SELECT id FROM questions WHERE test_id = $1 ORDER BY position ASC', [test.id]);
             await transaction(async (client) => {
+                await insertAuditLog(client, {
+                    orgId: test.org_id,
+                    actorUserId: user.id,
+                    action: 'question.deleted',
+                    entityType: 'question',
+                    entityId: questionId,
+                    metadata: { testId: test.id, title: question.title, type: question.type },
+                    ipAddress: requestIp,
+                });
+                await client.query('DELETE FROM questions WHERE id = $1', [questionId]);
+                const remaining = await client.query('SELECT id FROM questions WHERE test_id = $1 ORDER BY position ASC', [test.id]);
                 for (const [index, row] of remaining.rows.entries()) {
                     await client.query('UPDATE questions SET position = $1 WHERE id = $2', [index, row.id]);
                 }
@@ -1146,6 +1390,7 @@ const handleRequest = async (req, res) => {
         const orgId = String(body.org_id || '');
         const testId = String(body.test_id || '');
         const attemptId = String(body.attempt_id || '');
+        const requestIp = getRequestIp(req);
         const membership = await requireMembership(user.id, orgId);
         if (membership.role !== 'student') throw new HttpError(403, 'Only students can submit test attempts.');
         if (!attemptId) throw new HttpError(400, 'Attempt ID is required.');
@@ -1214,6 +1459,24 @@ const handleRequest = async (req, res) => {
                 violationsCount,
                 attemptId,
             ]);
+
+            await insertAuditLog(client, {
+                orgId,
+                actorUserId: user.id,
+                action: 'submission.created',
+                entityType: 'submission',
+                entityId: submissionId,
+                metadata: {
+                    testId,
+                    testTitle: test.title,
+                    attemptId,
+                    score,
+                    totalPoints,
+                    integrityScore,
+                    violationsCount,
+                },
+                ipAddress: requestIp,
+            });
 
             return submissionResult.rows[0];
         });

@@ -86,6 +86,20 @@ export const initDb = async () => {
     `);
 
     await query(`
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id TEXT PRIMARY KEY,
+            org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+            actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            action TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ip_address TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await query(`
         CREATE TABLE IF NOT EXISTS org_members (
             id TEXT PRIMARY KEY,
             org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -181,6 +195,9 @@ export const initDb = async () => {
     `);
 
     await query('CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_audit_logs_org_id ON audit_logs(org_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_user_id ON audit_logs(actor_user_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);');
     await query('CREATE INDEX IF NOT EXISTS idx_org_members_user_id ON org_members(user_id);');
     await query('CREATE INDEX IF NOT EXISTS idx_org_members_org_id ON org_members(org_id);');
     await query('CREATE INDEX IF NOT EXISTS idx_tests_org_id ON tests(org_id);');

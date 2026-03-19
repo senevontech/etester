@@ -30,6 +30,8 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard', overlay = fals
         navigate('/login', { replace: true });
     };
 
+    const logoSrc = theme === 'dark' ? '/logo.png' : '/logo-black.png';
+
     return (
         <>
         <header style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, background: 'color-mix(in srgb, var(--bg) 20%, transparent)', backdropFilter: 'blur(20px) saturate(180%)', WebkitBackdropFilter: 'blur(20px) saturate(180%)', borderBottom: '1px solid color-mix(in srgb, var(--border) 40%, transparent)', transition: 'background 0.25s ease' }}>
@@ -37,7 +39,7 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard', overlay = fals
                 {/* Logo */}
                 <Link to={isAuthenticated ? (user?.role === 'admin' ? '/admin' : '/dashboard') : '/'} style={{ display: 'flex', alignItems: 'center', textDecoration: 'none', flexShrink: 0 }}>
                     <img
-                        src="/logo.png"
+                        src={logoSrc}
                         alt="Etester"
                         style={{ height: '32px', width: 'auto', maxWidth: '140px', objectFit: 'contain', display: 'block' }}
                     />

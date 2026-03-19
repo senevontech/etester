@@ -1,14 +1,64 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Edit2, Trash2, Globe, EyeOff, BarChart2, BookOpen, Clock, ChevronRight, Shield, Copy, Check, Users, Table2 } from 'lucide-react';
+import { Plus, Edit2, Trash2, Globe, EyeOff, BarChart2, BookOpen, Clock, ChevronRight, Shield, Copy, Check, Users, Table2, Activity } from 'lucide-react';
 import Navbar from '../../components/Layout/Navbar';
 import { useTests } from '../../context/TestContext';
 import { useOrg } from '../../context/OrgContext';
 import { Difficulty } from '../../context/TestContext';
 import type { Test } from '../../context/TestContext';
+import { apiRequest } from '../../lib/api';
 
 const DIFF_BADGE: Record<Difficulty, string> = {
     Easy: 'badge-success', Medium: 'badge-warning', Hard: 'badge-danger',
+};
+
+interface AuditLogEntry {
+    id: string;
+    action: string;
+    entity_type: string;
+    entity_id: string | null;
+    metadata: Record<string, unknown>;
+    created_at: string;
+    actor: {
+        id: string;
+        name: string;
+        email: string;
+    } | null;
+}
+
+const ACTION_LABELS: Record<string, string> = {
+    'org.created': 'created the organization',
+    'org.joined': 'joined the organization',
+    'org.invite_code_regenerated': 'rotated the invite code',
+    'test.created': 'created a test',
+    'test.updated': 'updated a test',
+    'test.published': 'published a test',
+    'test.unpublished': 'unpublished a test',
+    'test.deleted': 'deleted a test',
+    'question.created': 'added a question',
+    'question.updated': 'updated a question',
+    'question.deleted': 'deleted a question',
+    'question.reordered': 'reordered questions',
+    'attempt.started': 'started an attempt',
+    'submission.created': 'submitted an attempt',
+};
+
+const getAuditSubject = (log: AuditLogEntry) => {
+    const title = typeof log.metadata.title === 'string'
+        ? log.metadata.title
+        : typeof log.metadata.testTitle === 'string'
+            ? log.metadata.testTitle
+            : typeof log.metadata.organizationName === 'string'
+                ? log.metadata.organizationName
+                : null;
+
+    if (title) return title;
+    if (log.entity_type === 'question') return 'question';
+    if (log.entity_type === 'test') return 'test';
+    if (log.entity_type === 'organization') return 'organization';
+    if (log.entity_type === 'submission') return 'submission';
+    if (log.entity_type === 'attempt') return 'attempt';
+    return log.entity_type;
 };
 
 // ─── Create Test Modal ────────────────────────────────────────────────────────
@@ -114,6 +164,41 @@ const AdminDashboard: React.FC = () => {
     const [showCreate, setShowCreate] = useState(false);
     const [copied, setCopied] = useState(false);
     const [publishError, setPublishError] = useState<string | null>(null);
+    const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+    const [auditLoading, setAuditLoading] = useState(false);
+
+    useEffect(() => {
+        if (!activeOrg?.id) {
+            setAuditLogs([]);
+            return;
+        }
+
+        let cancelled = false;
+        setAuditLoading(true);
+
+        const loadAuditLogs = async () => {
+            try {
+                const data = await apiRequest<{ logs: AuditLogEntry[] }>(`/orgs/${activeOrg.id}/audit-logs?limit=12`);
+                if (!cancelled) {
+                    setAuditLogs(data.logs ?? []);
+                }
+            } catch {
+                if (!cancelled) {
+                    setAuditLogs([]);
+                }
+            } finally {
+                if (!cancelled) {
+                    setAuditLoading(false);
+                }
+            }
+        };
+
+        void loadAuditLogs();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [activeOrg?.id, activeOrg?.invite_code, tests]);
 
     const handleTogglePublish = async (test: Test) => {
         setPublishError(null);
@@ -200,6 +285,40 @@ const AdminDashboard: React.FC = () => {
                         </div>
                     ))}
                 </div>
+
+                <section className="card anim-fade-up" style={{ padding: '1rem 1.25rem', marginBottom: '1.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.875rem', flexWrap: 'wrap' }}>
+                        <div>
+                            <p className="label" style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Recent Activity</p>
+                            <h2 className="t-h3" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                <Activity size={16} /> Audit Trail
+                            </h2>
+                        </div>
+                        <span className="t-small" style={{ color: 'var(--text-muted)' }}>Latest 12 org events</span>
+                    </div>
+
+                    {auditLoading ? (
+                        <p className="t-body" style={{ color: 'var(--text-muted)' }}>Loading recent activity...</p>
+                    ) : auditLogs.length === 0 ? (
+                        <p className="t-body" style={{ color: 'var(--text-muted)' }}>No audit entries yet for this organization.</p>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                            {auditLogs.map((log) => (
+                                <div key={log.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '0.75rem', paddingBottom: '0.625rem', borderBottom: '1px solid var(--border)' }}>
+                                    <div>
+                                        <p className="t-small" style={{ color: 'var(--text)', fontWeight: 700, marginBottom: '0.15rem' }}>
+                                            {(log.actor?.name || log.actor?.email || 'System')} {ACTION_LABELS[log.action] ?? log.action} <span style={{ color: 'var(--accent)' }}>{getAuditSubject(log)}</span>
+                                        </p>
+                                        <p className="t-small" style={{ color: 'var(--text-muted)' }}>
+                                            {new Date(log.created_at).toLocaleString()}
+                                        </p>
+                                    </div>
+                                    <span className="badge badge-neutral" style={{ alignSelf: 'start' }}>{log.entity_type}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </section>
 
                 {/* Publish error banner */}
                 {publishError && (
