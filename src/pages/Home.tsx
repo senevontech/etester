@@ -2,10 +2,13 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, CheckCircle2, Code2, Layout, Shield, Zap } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 import Navbar from '../components/Layout/Navbar';
 
 const Home: React.FC = () => {
     const { isAuthenticated, user } = useAuth();
+    const { theme } = useTheme();
+    const footerLogoSrc = theme === 'dark' ? '/logo/logo-white.png' : '/logo/logo-black.png';
 
     return (
         <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -273,10 +276,11 @@ const Home: React.FC = () => {
                     <div className="flex-between" style={{ flexWrap: 'wrap', gap: '2rem' }}>
                         <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                                <div style={{ width: '24px', height: '24px', background: 'var(--accent)', borderRadius: '5px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                    <Shield size={14} color="var(--accent-fg)" strokeWidth={2.5} />
-                                </div>
-                                <span style={{ fontWeight: 900, fontSize: '1rem', letterSpacing: '-0.03em' }}>Etester</span>
+                                <img
+                                    src={footerLogoSrc}
+                                    alt="Etester"
+                                    style={{ height: '28px', width: 'auto', maxWidth: '140px', objectFit: 'contain', display: 'block' }}
+                                />
                             </div>
                             <p className="t-small" style={{ color: 'var(--text-muted)' }}>© 2026 Etester Inc. All rights reserved.</p>
                         </div>

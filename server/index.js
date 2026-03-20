@@ -34,9 +34,22 @@ class HttpError extends Error {
 
 const now = () => new Date().toISOString();
 
+const isLoopbackDevOrigin = (origin) => {
+    if (!origin || NODE_ENV === 'production' || ALLOWED_ORIGINS.length > 0) return false;
+
+    try {
+        const url = new URL(origin);
+        return ['http:', 'https:'].includes(url.protocol)
+            && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+            && Boolean(url.port);
+    } catch {
+        return false;
+    }
+};
+
 const isOriginAllowed = (origin) => {
     if (!origin) return true;
-    return EFFECTIVE_ALLOWED_ORIGINS.includes(origin);
+    return EFFECTIVE_ALLOWED_ORIGINS.includes(origin) || isLoopbackDevOrigin(origin);
 };
 
 const getCorsHeaders = (req) => {
@@ -1509,6 +1522,9 @@ server.listen(PORT, () => {
     console.log(`Code execution provider: ${getExecutionProvider()}`);
     if (EFFECTIVE_ALLOWED_ORIGINS.length > 0) {
         console.log(`CORS allowlist: ${EFFECTIVE_ALLOWED_ORIGINS.join(', ')}`);
+        if (NODE_ENV !== 'production' && ALLOWED_ORIGINS.length === 0) {
+            console.log('CORS also allows loopback development origins on any port.');
+        }
     } else {
         console.warn('CORS allowlist is empty. Set ALLOWED_ORIGINS before deploying to production.');
     }

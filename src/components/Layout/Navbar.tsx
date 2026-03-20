@@ -30,7 +30,7 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard', overlay = fals
         navigate('/login', { replace: true });
     };
 
-    const logoSrc = theme === 'dark' ? '/logo.png' : '/logo-black.png';
+    const logoSrc = theme === 'dark' ? '/logo/logo-white.png' : '/logo/logo-black.png';
 
     return (
         <>
@@ -41,6 +41,10 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard', overlay = fals
                     <img
                         src={logoSrc}
                         alt="Etester"
+                        onError={theme === 'dark' ? (event) => {
+                            event.currentTarget.onerror = null;
+                            event.currentTarget.src = '/logo.png';
+                        } : undefined}
                         style={{ height: '32px', width: 'auto', maxWidth: '140px', objectFit: 'contain', display: 'block' }}
                     />
                 </Link>
