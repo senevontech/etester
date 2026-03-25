@@ -1095,36 +1095,59 @@ const handleRequest = async (req, res) => {
 
         const startedAt = now();
         const expiresAt = new Date(Date.now() + Math.max(1, Number(test.duration || 60)) * 60 * 1000).toISOString();
-        const attempt = await transaction(async (client) => {
-            const attemptId = randomUUID();
-            const result = await client.query(`
-                INSERT INTO test_attempts (
-                    id, test_id, org_id, student_id, status,
-                    started_at, last_heartbeat_at, expires_at, violations_count, integrity_events
-                )
-                VALUES ($1, $2, $3, $4, 'active', $5, $5, $6, 0, '[]'::jsonb)
-                RETURNING *
-            `, [
-                attemptId,
-                testId,
-                test.org_id,
-                user.id,
-                startedAt,
-                expiresAt,
-            ]);
+        let attempt;
 
-            await insertAuditLog(client, {
-                orgId: test.org_id,
-                actorUserId: user.id,
-                action: 'attempt.started',
-                entityType: 'attempt',
-                entityId: attemptId,
-                metadata: { testId, testTitle: test.title, expiresAt },
-                ipAddress: requestIp,
+        try {
+            attempt = await transaction(async (client) => {
+                const attemptId = randomUUID();
+                const result = await client.query(`
+                    INSERT INTO test_attempts (
+                        id, test_id, org_id, student_id, status,
+                        started_at, last_heartbeat_at, expires_at, violations_count, integrity_events
+                    )
+                    VALUES ($1, $2, $3, $4, 'active', $5, $5, $6, 0, '[]'::jsonb)
+                    RETURNING *
+                `, [
+                    attemptId,
+                    testId,
+                    test.org_id,
+                    user.id,
+                    startedAt,
+                    expiresAt,
+                ]);
+
+                await insertAuditLog(client, {
+                    orgId: test.org_id,
+                    actorUserId: user.id,
+                    action: 'attempt.started',
+                    entityType: 'attempt',
+                    entityId: attemptId,
+                    metadata: { testId, testTitle: test.title, expiresAt },
+                    ipAddress: requestIp,
+                });
+
+                return result.rows[0];
             });
+        } catch (error) {
+            // React StrictMode can trigger duplicate attempt-start requests in development.
+            // If another request already created the active attempt, return that row instead of 500.
+            if (error && typeof error === 'object' && 'code' in error && error.code === '23505') {
+                const existingAttemptResult = await query(`
+                    SELECT *
+                    FROM test_attempts
+                    WHERE test_id = $1 AND student_id = $2 AND status = 'active'
+                    ORDER BY started_at DESC
+                    LIMIT 1
+                `, [testId, user.id]);
 
-            return result.rows[0];
-        });
+                if (existingAttemptResult.rows.length > 0) {
+                    sendJson(req, res, 200, { attempt: mapAttemptRow(existingAttemptResult.rows[0]) });
+                    return;
+                }
+            }
+
+            throw error;
+        }
 
         sendJson(req, res, 201, { attempt: mapAttemptRow(attempt) });
         return;
