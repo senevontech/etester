@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
-import { ChevronLeft, ChevronRight, Play, Send, Settings, Terminal, Clock, ShieldCheck, Zap, CheckCircle2, TerminalSquare, LifeBuoy } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Play, Send, Settings, Terminal, Clock, ShieldCheck, Zap, CheckCircle2, TerminalSquare, LifeBuoy, House } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTheme } from '../context/ThemeContext';
 import { useTests } from '../context/TestContext';
@@ -378,6 +378,9 @@ const TestRoom: React.FC = () => {
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <button className="btn btn-sm btn-ghost" style={{ gap: '0.375rem' }} onClick={() => navigate('/')}>
+                        <House size={13} /> Home
+                    </button>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', padding: '0.3rem 0.75rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '7px' }}>
                         <Clock size={13} style={{ color: 'var(--text-muted)' }} />
                         <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.9rem', fontWeight: 700, color: (timeLeft ?? 0) < 300 ? 'var(--danger)' : 'var(--text)', letterSpacing: '0.02em' }}>

@@ -23,6 +23,7 @@ const EFFECTIVE_ALLOWED_ORIGINS = ALLOWED_ORIGINS.length > 0 || NODE_ENV === 'pr
 const MAX_CODE_TEST_CASES = 20;
 const MAX_CODE_TEST_CASE_INPUT_BYTES = 4000;
 const MAX_CODE_TEST_CASE_OUTPUT_BYTES = 4000;
+const MAX_BULK_IMPORT_QUESTIONS = 200;
 const rateLimitStore = new Map();
 
 class HttpError extends Error {
@@ -428,6 +429,38 @@ const normalizeQuestionInput = (question, position) => ({
     test_cases: question.type === 'code' ? JSON.stringify(normalizeCodeTestCases(question.test_cases ?? question.testCases)) : null,
     created_at: now(),
 });
+
+const insertQuestionRow = async (client, question) => {
+    const result = await client.query(`
+        INSERT INTO questions (
+            id, test_id, type, title, description, points, position,
+            options, answer, template, language, constraints, examples, test_cases, created_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7,
+            $8::jsonb, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15
+        )
+        RETURNING *
+    `, [
+        question.id,
+        question.test_id,
+        question.type,
+        question.title,
+        question.description,
+        question.points,
+        question.position,
+        question.options,
+        question.answer,
+        question.template,
+        question.language,
+        question.constraints,
+        question.examples,
+        question.test_cases,
+        question.created_at,
+    ]);
+
+    return result.rows[0];
+};
 
 const questionHasHiddenCodeCases = (question) =>
     question.type === 'code' && normalizeCodeTestCases(question.test_cases).some((testCase) => testCase.hidden);
@@ -1127,33 +1160,7 @@ const handleRequest = async (req, res) => {
         const question = normalizeQuestionInput({ ...body, testId }, positionResult.rows[0].count);
 
         const createdQuestion = await transaction(async (client) => {
-            const result = await client.query(`
-                INSERT INTO questions (
-                    id, test_id, type, title, description, points, position,
-                    options, answer, template, language, constraints, examples, test_cases, created_at
-                )
-                VALUES (
-                    $1, $2, $3, $4, $5, $6, $7,
-                    $8::jsonb, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15
-                )
-                RETURNING *
-            `, [
-                question.id,
-                question.test_id,
-                question.type,
-                question.title,
-                question.description,
-                question.points,
-                question.position,
-                question.options,
-                question.answer,
-                question.template,
-                question.language,
-                question.constraints,
-                question.examples,
-                question.test_cases,
-                question.created_at,
-            ]);
+            const created = await insertQuestionRow(client, question);
 
             await insertAuditLog(client, {
                 orgId: test.org_id,
@@ -1165,10 +1172,58 @@ const handleRequest = async (req, res) => {
                 ipAddress: requestIp,
             });
 
-            return result.rows[0];
+            return created;
         });
 
         sendJson(req, res, 201, { question: mapQuestionRow(createdQuestion) });
+        return;
+    }
+
+    match = pathname.match(/^\/api\/tests\/([^/]+)\/questions\/bulk$/);
+    if (req.method === 'POST' && match) {
+        const { user } = await requireAuth(req);
+        const testId = decodeURIComponent(match[1]);
+        const test = await getTestOrThrow(testId);
+        await requireAdmin(user.id, test.org_id);
+        const requestIp = getRequestIp(req);
+
+        const incomingQuestions = Array.isArray(body.questions) ? body.questions : [];
+        if (incomingQuestions.length === 0) {
+            throw new HttpError(400, 'At least one question is required.');
+        }
+        if (incomingQuestions.length > MAX_BULK_IMPORT_QUESTIONS) {
+            throw new HttpError(400, `A single import can contain at most ${MAX_BULK_IMPORT_QUESTIONS} questions.`);
+        }
+
+        const positionResult = await query('SELECT COUNT(*)::int AS count FROM questions WHERE test_id = $1', [testId]);
+        const startingPosition = positionResult.rows[0].count;
+        const questions = incomingQuestions.map((item, index) => normalizeQuestionInput({ ...item, testId }, startingPosition + index));
+
+        const createdQuestions = await transaction(async (client) => {
+            const created = [];
+
+            for (const question of questions) {
+                created.push(await insertQuestionRow(client, question));
+            }
+
+            await insertAuditLog(client, {
+                orgId: test.org_id,
+                actorUserId: user.id,
+                action: 'question.imported',
+                entityType: 'test',
+                entityId: testId,
+                metadata: {
+                    importedCount: created.length,
+                    mcqCount: questions.filter((question) => question.type === 'mcq').length,
+                    codeCount: questions.filter((question) => question.type === 'code').length,
+                },
+                ipAddress: requestIp,
+            });
+
+            return created;
+        });
+
+        sendJson(req, res, 201, { questions: createdQuestions.map(mapQuestionRow) });
         return;
     }
 

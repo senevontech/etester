@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Shield, Eye, EyeOff, ArrowRight, CheckCircle2, Moon, Sun, Loader2 } from 'lucide-react';
+import { Shield, Eye, EyeOff, ArrowRight, CheckCircle2, Moon, Sun, Loader2, House } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 
@@ -52,9 +52,14 @@ const Signup: React.FC = () => {
                     </div>
                     <span style={{ fontWeight: 900, fontSize: '0.95rem', letterSpacing: '-0.03em', color: 'var(--text)' }}>Etester</span>
                 </div>
-                <button className="icon-btn" onClick={toggle} aria-label="Toggle theme">
-                    {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <Link to="/" className="btn btn-sm btn-ghost" style={{ gap: '0.375rem' }}>
+                        <House size={14} /> Home
+                    </Link>
+                    <button className="icon-btn" onClick={toggle} aria-label="Toggle theme">
+                        {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+                    </button>
+                </div>
             </div>
 
             {/* Center */}

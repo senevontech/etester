@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Moon, Sun, Menu, X, ShieldAlert, LogOut, ChevronDown } from 'lucide-react';
+import { Moon, Sun, Menu, X, ShieldAlert, LogOut, ChevronDown, House } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useOrg } from '../../context/OrgContext';
@@ -51,6 +51,9 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard', overlay = fals
 
                 {/* Desktop Nav */}
                 <nav style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }} className="desktop-nav">
+                    <Link to="/" style={{ padding: '0.375rem 0.75rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)', textDecoration: 'none', transition: 'all 0.15s ease', display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                        <House size={14} /> Home
+                    </Link>
                     {user?.role === 'student' && (
                         <>
                             <Link to="/dashboard" style={{ padding: '0.375rem 0.75rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 600, color: activeTab === 'dashboard' ? 'var(--text)' : 'var(--text-muted)', background: activeTab === 'dashboard' ? 'var(--surface)' : 'transparent', transition: 'all 0.15s ease', textDecoration: 'none' }}>
@@ -168,6 +171,9 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard', overlay = fals
             {/* Mobile dropdown */}
             {mobileOpen && (
                 <div className="anim-fade-in" style={{ borderTop: '1px solid var(--border)', background: 'var(--bg)', padding: '0.75rem 1rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                    <Link to="/" onClick={() => setMobileOpen(false)} style={{ padding: '0.625rem 0.75rem', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <House size={14} /> Home
+                    </Link>
                     {!isAuthenticated && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.5rem' }}>
                             <Link to="/login" onClick={() => setMobileOpen(false)} className="btn btn-md btn-outline" style={{ width: '100%' }}>
@@ -181,6 +187,9 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard', overlay = fals
                     )}
                     {user?.role === 'student' && (
                         <>
+                            <Link to="/" onClick={() => setMobileOpen(false)} style={{ padding: '0.625rem 0.75rem', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <House size={14} /> Home
+                            </Link>
                             <Link to="/dashboard" onClick={() => setMobileOpen(false)} style={{ padding: '0.625rem 0.75rem', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 700, color: activeTab === 'dashboard' ? 'var(--text)' : 'var(--text-muted)', background: activeTab === 'dashboard' ? 'var(--surface)' : 'transparent', textDecoration: 'none' }}>
                                 Dashboard
                             </Link>
@@ -190,9 +199,14 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard', overlay = fals
                         </>
                     )}
                     {user?.role === 'admin' && (
-                        <Link to="/admin" onClick={() => setMobileOpen(false)} style={{ padding: '0.625rem 0.75rem', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <>
+                            <Link to="/" onClick={() => setMobileOpen(false)} style={{ padding: '0.625rem 0.75rem', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <House size={14} /> Home
+                            </Link>
+                            <Link to="/admin" onClick={() => setMobileOpen(false)} style={{ padding: '0.625rem 0.75rem', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <ShieldAlert size={14} /> Admin Panel
-                        </Link>
+                            </Link>
+                        </>
                     )}
                     <div style={{ marginTop: '0.5rem', borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
                         {user && (

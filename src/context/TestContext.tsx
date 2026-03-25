@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { apiRequest } from '../lib/api';
+import { ApiError, apiRequest } from '../lib/api';
 import { useOrg } from './OrgContext';
 import { useAuth } from './AuthContext';
 
@@ -54,6 +54,7 @@ interface TestContextValue {
     publishTest: (id: string) => Promise<void>;
     unpublishTest: (id: string) => Promise<void>;
     addQuestion: (testId: string, question: Omit<Question, 'id'>) => Promise<void>;
+    addQuestionsBulk: (testId: string, questions: Omit<Question, 'id'>[]) => Promise<{ created: Question[]; error: string | null }>;
     updateQuestion: (testId: string, qId: string, data: Partial<Question>) => Promise<void>;
     deleteQuestion: (testId: string, qId: string) => Promise<void>;
     reorderQuestions: (testId: string, questions: Question[]) => Promise<void>;
@@ -230,6 +231,53 @@ export const TestProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     }, []);
 
+    const addQuestionsBulk = useCallback(async (testId: string, questions: Omit<Question, 'id'>[]) => {
+        try {
+            const result = await apiRequest<QuestionsResponse>(`/tests/${testId}/questions/bulk`, {
+                method: 'POST',
+                body: { questions },
+            });
+            const created = (result.questions ?? []).map(rowToQuestion);
+            setTests(prev => prev.map(test => (
+                test.id === testId
+                    ? { ...test, questions: [...test.questions, ...created] }
+                    : test
+            )));
+            return { created, error: null };
+        } catch (error) {
+            if (error instanceof ApiError && error.status === 404) {
+                try {
+                    const created: Question[] = [];
+                    for (const question of questions) {
+                        const result = await apiRequest<QuestionResponse>(`/tests/${testId}/questions`, {
+                            method: 'POST',
+                            body: question,
+                        });
+                        created.push(rowToQuestion(result.question));
+                    }
+
+                    setTests(prev => prev.map(test => (
+                        test.id === testId
+                            ? { ...test, questions: [...test.questions, ...created] }
+                            : test
+                    )));
+
+                    return { created, error: null };
+                } catch (fallbackError) {
+                    return {
+                        created: [],
+                        error: fallbackError instanceof Error ? fallbackError.message : 'Failed to import questions.',
+                    };
+                }
+            }
+
+            return {
+                created: [],
+                error: error instanceof Error ? error.message : 'Failed to import questions.',
+            };
+        }
+    }, []);
+
     const updateQuestion = useCallback(async (testId: string, qId: string, data: Partial<Question>) => {
         const payload = { ...data } as Record<string, unknown>;
         delete payload.id;
@@ -298,6 +346,7 @@ export const TestProvider: React.FC<{ children: React.ReactNode }> = ({ children
             publishTest,
             unpublishTest,
             addQuestion,
+            addQuestionsBulk,
             updateQuestion,
             deleteQuestion,
             reorderQuestions,

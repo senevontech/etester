@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, ShieldAlert, ArrowRight, Plus, LogIn, Moon, Sun, Loader2 } from 'lucide-react';
+import { Shield, ShieldAlert, ArrowRight, Plus, LogIn, Moon, Sun, Loader2, House } from 'lucide-react';
 import { useOrg } from '../../context/OrgContext';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -52,9 +52,14 @@ const OrgSetup: React.FC = () => {
                     </div>
                     <span style={{ fontWeight: 900, fontSize: '0.95rem', letterSpacing: '-0.03em', color: 'var(--text)' }}>Etester</span>
                 </div>
-                <button className="icon-btn" onClick={toggle} aria-label="Toggle theme">
-                    {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <button className="btn btn-sm btn-ghost" style={{ gap: '0.375rem' }} onClick={() => navigate('/')}>
+                        <House size={14} /> Home
+                    </button>
+                    <button className="icon-btn" onClick={toggle} aria-label="Toggle theme">
+                        {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+                    </button>
+                </div>
             </div>
 
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem 1rem' }}>
