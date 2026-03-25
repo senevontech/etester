@@ -1,31 +1,5 @@
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const ROOT_DIR = path.resolve(__dirname, '..');
-const ENV_FILE = path.join(ROOT_DIR, '.env');
-
-const loadEnvFile = async () => {
-    try {
-        const raw = await fs.readFile(ENV_FILE, 'utf8');
-        raw.split(/\r?\n/).forEach((line) => {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith('#')) return;
-            const separatorIndex = trimmed.indexOf('=');
-            if (separatorIndex <= 0) return;
-            const key = trimmed.slice(0, separatorIndex).trim();
-            const value = trimmed.slice(separatorIndex + 1).trim();
-            if (!process.env[key]) process.env[key] = value;
-        });
-    } catch {
-        // .env is optional if variables already exist in the environment.
-    }
-};
-
-await loadEnvFile();
+import './env.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -129,13 +103,19 @@ export const initDb = async () => {
         CREATE TABLE IF NOT EXISTS questions (
             id TEXT PRIMARY KEY,
             test_id TEXT NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
-            type TEXT NOT NULL CHECK (type IN ('mcq', 'code')),
+            type TEXT NOT NULL CHECK (type IN ('mcq', 'code', 'text', 'numeric')),
+            category TEXT NOT NULL DEFAULT 'mcq',
             title TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
+            image_url TEXT,
             points INTEGER NOT NULL DEFAULT 0,
             position INTEGER NOT NULL DEFAULT 0,
             options JSONB,
             answer INTEGER,
+            accepted_answers JSONB,
+            case_sensitive BOOLEAN NOT NULL DEFAULT FALSE,
+            numeric_answer DOUBLE PRECISION,
+            numeric_tolerance DOUBLE PRECISION NOT NULL DEFAULT 0,
             template TEXT,
             language TEXT,
             constraints JSONB,
@@ -181,7 +161,47 @@ export const initDb = async () => {
 
     await query(`
         ALTER TABLE questions
+        ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'mcq';
+    `);
+
+    await query(`
+        ALTER TABLE questions
+        ADD COLUMN IF NOT EXISTS image_url TEXT;
+    `);
+
+    await query(`
+        ALTER TABLE questions
         ADD COLUMN IF NOT EXISTS test_cases JSONB;
+    `);
+
+    await query(`
+        ALTER TABLE questions
+        ADD COLUMN IF NOT EXISTS accepted_answers JSONB;
+    `);
+
+    await query(`
+        ALTER TABLE questions
+        ADD COLUMN IF NOT EXISTS case_sensitive BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
+    await query(`
+        ALTER TABLE questions
+        ADD COLUMN IF NOT EXISTS numeric_answer DOUBLE PRECISION;
+    `);
+
+    await query(`
+        ALTER TABLE questions
+        ADD COLUMN IF NOT EXISTS numeric_tolerance DOUBLE PRECISION NOT NULL DEFAULT 0;
+    `);
+
+    await query(`
+        ALTER TABLE questions
+        DROP CONSTRAINT IF EXISTS questions_type_check;
+    `);
+
+    await query(`
+        ALTER TABLE questions
+        ADD CONSTRAINT questions_type_check CHECK (type IN ('mcq', 'code', 'text', 'numeric'));
     `);
 
     await query(`

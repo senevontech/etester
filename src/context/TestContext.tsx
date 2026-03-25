@@ -2,33 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { ApiError, apiRequest } from '../lib/api';
 import { useOrg } from './OrgContext';
 import { useAuth } from './AuthContext';
-
-export type Difficulty = 'Easy' | 'Medium' | 'Hard';
-
-export interface McqQuestion {
-    id: string;
-    type: 'mcq';
-    title: string;
-    description: string;
-    options: string[];
-    answer?: number;
-    points: number;
-}
-
-export interface CodeQuestion {
-    id: string;
-    type: 'code';
-    title: string;
-    description: string;
-    template: string;
-    language: string;
-    constraints: string[];
-    examples: { input: string; output: string }[];
-    testCases?: { id?: string; input: string; output: string; hidden: boolean }[];
-    points: number;
-}
-
-export type Question = McqQuestion | CodeQuestion;
+import type { CodeQuestion, Difficulty, McqQuestion, NumericQuestion, Question, TextQuestion } from '../types';
 
 export interface Test {
     id: string;
@@ -68,26 +42,58 @@ const rowToQuestion = (q: any): Question => {
         return {
             id: q.id,
             type: 'mcq',
+            category: q.category === 'aptitude' ? 'aptitude' : 'mcq',
             title: q.title,
             description: q.description ?? '',
+            imageUrl: q.image_url ?? q.imageUrl ?? undefined,
             options: q.options ?? [],
             answer: typeof q.answer === 'number' ? q.answer : undefined,
             points: q.points,
         };
     }
 
-    return {
-        id: q.id,
-        type: 'code',
-        title: q.title,
-        description: q.description ?? '',
-        template: q.template ?? '',
-        language: q.language ?? 'python',
+    if (q.type === 'text') {
+        return {
+            id: q.id,
+            type: 'text',
+            category: 'saq',
+            title: q.title,
+            description: q.description ?? '',
+            imageUrl: q.image_url ?? q.imageUrl ?? undefined,
+            acceptedAnswers: q.accepted_answers ?? q.acceptedAnswers ?? [],
+            caseSensitive: Boolean(q.case_sensitive ?? q.caseSensitive),
+            points: q.points,
+        } satisfies TextQuestion;
+    }
+
+    if (q.type === 'numeric') {
+        return {
+            id: q.id,
+            type: 'numeric',
+            category: 'numerical',
+            title: q.title,
+            description: q.description ?? '',
+            imageUrl: q.image_url ?? q.imageUrl ?? undefined,
+            answer: typeof q.numeric_answer === 'number' ? q.numeric_answer : undefined,
+            tolerance: typeof q.numeric_tolerance === 'number' ? q.numeric_tolerance : Number(q.numeric_tolerance ?? 0) || 0,
+            points: q.points,
+        } satisfies NumericQuestion;
+    }
+
+        return {
+            id: q.id,
+            type: 'code',
+            category: 'coding',
+            title: q.title,
+            description: q.description ?? '',
+            imageUrl: q.image_url ?? q.imageUrl ?? undefined,
+            template: q.template ?? '',
+            language: q.language ?? 'python',
         constraints: q.constraints ?? [],
         examples: q.examples ?? [],
         testCases: q.test_cases ?? q.testCases ?? [],
         points: q.points,
-    };
+    } satisfies CodeQuestion;
 };
 
 const rowToTest = (row: any): Test => ({

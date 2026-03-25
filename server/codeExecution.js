@@ -1,3 +1,4 @@
+import './env.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +12,7 @@ const MAX_STDIN_BYTES = Math.max(256, Number(process.env.CODE_EXECUTION_MAX_STDI
 const EXECUTION_API_URL = process.env.CODE_EXECUTION_API_URL || '';
 const EXECUTION_API_TOKEN = process.env.CODE_EXECUTION_API_TOKEN || '';
 const SUPPORTED_LOCAL_LANGUAGES = new Set(['javascript', 'typescript']);
+const LOCAL_PYTHON_COMMAND = process.env.CODE_EXECUTION_PYTHON_BIN || 'python';
 
 const clampOutput = (value) => {
     if (value.length <= MAX_OUTPUT_BYTES) return value;
@@ -49,22 +51,14 @@ const transpileTypescript = async (source) => {
     return result.code;
 };
 
-const runLocalNode = async (language, code, stdin = '') => {
-    if (!SUPPORTED_LOCAL_LANGUAGES.has(language)) {
-        throw new Error(`Local execution does not support ${language}.`);
-    }
-
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'etester-run-'));
-    const filePath = path.join(tempDir, `${randomUUID()}.mjs`);
-    const executableCode = language === 'typescript' ? await transpileTypescript(code) : code;
+const runLocalProcess = async ({ command, args, stdin = '', filePath, code, env }) => {
+    await fs.writeFile(filePath, code, 'utf8');
 
     try {
-        await fs.writeFile(filePath, executableCode, 'utf8');
-
         return await new Promise((resolve, reject) => {
-            const child = spawn(process.execPath, [filePath], {
-                cwd: tempDir,
-                env: {},
+            const child = spawn(command, args, {
+                cwd: path.dirname(filePath),
+                env,
                 stdio: ['pipe', 'pipe', 'pipe'],
                 windowsHide: true,
             });
@@ -142,6 +136,54 @@ const runLocalNode = async (language, code, stdin = '') => {
                 });
             });
         });
+    } catch (error) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+            throw new Error(`Local execution could not find ${command}.`);
+        }
+        throw error;
+    }
+};
+
+const runLocalNode = async (language, code, stdin = '') => {
+    if (!SUPPORTED_LOCAL_LANGUAGES.has(language)) {
+        throw new Error(`Local execution does not support ${language}.`);
+    }
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'etester-run-'));
+    const filePath = path.join(tempDir, `${randomUUID()}.mjs`);
+    const executableCode = language === 'typescript' ? await transpileTypescript(code) : code;
+
+    try {
+        return await runLocalProcess({
+            command: process.execPath,
+            args: [filePath],
+            stdin,
+            filePath,
+            code: executableCode,
+            env: {},
+        });
+    } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+    }
+};
+
+const runLocalPython = async (code, stdin = '') => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'etester-run-'));
+    const filePath = path.join(tempDir, `${randomUUID()}.py`);
+
+    try {
+        return await runLocalProcess({
+            command: LOCAL_PYTHON_COMMAND,
+            args: ['-I', filePath],
+            stdin,
+            filePath,
+            code,
+            env: {
+                ...process.env,
+                PYTHONIOENCODING: 'utf-8',
+                PYTHONUNBUFFERED: '1',
+            },
+        });
     } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -210,6 +252,9 @@ export const executeSnippet = async (language, code, options = {}) => {
     }
 
     if (EXECUTION_PROVIDER === 'local') {
+        if (normalizedLanguage === 'python') {
+            return runLocalPython(code, stdin);
+        }
         return runLocalNode(normalizedLanguage, code, stdin);
     }
 

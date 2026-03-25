@@ -7,6 +7,8 @@ import {
     Trash2,
     Code2,
     ListChecks,
+    Sigma,
+    TextCursorInput,
     GripVertical,
     Globe,
     EyeOff,
@@ -21,7 +23,16 @@ import {
 } from 'lucide-react';
 import { useTests } from '../../context/TestContext';
 import { useTheme } from '../../context/ThemeContext';
-import { Question, McqQuestion, CodeQuestion, Difficulty } from '../../types';
+import {
+    Question,
+    McqQuestion,
+    CodeQuestion,
+    Difficulty,
+    NumericQuestion,
+    TextQuestion,
+    QUESTION_CATEGORY_LABELS,
+    type QuestionCategory,
+} from '../../types';
 import { ImportedQuestionDraft, parseQuestionImportFile } from '../../utils/questionImport';
 
 interface AddQModalProps { testId: string; onClose: () => void; }
@@ -30,8 +41,10 @@ interface EditQModalProps { testId: string; question: Question; onClose: () => v
 
 const MCQ_TEMPLATE: Omit<McqQuestion, 'id'> = {
     type: 'mcq',
+    category: 'mcq',
     title: '',
     description: '',
+    imageUrl: '',
     options: ['', '', '', ''],
     answer: 0,
     points: 10,
@@ -39,8 +52,10 @@ const MCQ_TEMPLATE: Omit<McqQuestion, 'id'> = {
 
 const CODE_TEMPLATE: Omit<CodeQuestion, 'id'> = {
     type: 'code',
+    category: 'coding',
     title: '',
     description: '',
+    imageUrl: '',
     template: '// Write your solution here\n',
     language: 'typescript',
     constraints: [''],
@@ -49,22 +64,106 @@ const CODE_TEMPLATE: Omit<CodeQuestion, 'id'> = {
     points: 20,
 };
 
+const TEXT_TEMPLATE: Omit<TextQuestion, 'id'> = {
+    type: 'text',
+    category: 'saq',
+    title: '',
+    description: '',
+    imageUrl: '',
+    acceptedAnswers: [''],
+    caseSensitive: false,
+    points: 10,
+};
+
+const NUMERIC_TEMPLATE: Omit<NumericQuestion, 'id'> = {
+    type: 'numeric',
+    category: 'numerical',
+    title: '',
+    description: '',
+    imageUrl: '',
+    answer: 0,
+    tolerance: 0,
+    points: 10,
+};
+
+type QuestionPresetId = 'mcq' | 'aptitude' | 'saq' | 'numerical' | 'coding';
+
+const QUESTION_PRESETS: Array<{
+    id: QuestionPresetId;
+    type: Question['type'];
+    label: string;
+    icon: React.ComponentType<{ size?: number }>;
+}> = [
+    { id: 'mcq', type: 'mcq', label: 'Multiple Choice', icon: ListChecks },
+    { id: 'aptitude', type: 'mcq', label: 'Aptitude', icon: CheckCircle2 },
+    { id: 'saq', type: 'text', label: 'Short Answer', icon: TextCursorInput },
+    { id: 'numerical', type: 'numeric', label: 'Numerical', icon: Sigma },
+    { id: 'coding', type: 'code', label: 'Coding', icon: Code2 },
+];
+
+const getPresetIdForQuestion = (question: Pick<Question, 'type' | 'category'>): QuestionPresetId => {
+    if (question.type === 'mcq' && question.category === 'aptitude') return 'aptitude';
+    if (question.type === 'text') return 'saq';
+    if (question.type === 'numeric') return 'numerical';
+    if (question.type === 'code') return 'coding';
+    return 'mcq';
+};
+
+const getQuestionCategoryLabel = (question: Pick<Question, 'category'>) => QUESTION_CATEGORY_LABELS[question.category];
+
+const readFileAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(new Error('Failed to read image file.'));
+    reader.readAsDataURL(file);
+});
+
 const cloneQuestionForForm = (question: Question): Omit<Question, 'id'> => {
     if (question.type === 'mcq') {
         return {
             type: 'mcq',
+            category: question.category,
             title: question.title,
             description: question.description,
+            imageUrl: question.imageUrl ?? '',
             options: [...question.options],
             answer: question.answer ?? 0,
             points: question.points,
         };
     }
 
+    if (question.type === 'text') {
+        return {
+            type: 'text',
+            category: 'saq',
+            title: question.title,
+            description: question.description,
+            imageUrl: question.imageUrl ?? '',
+            acceptedAnswers: [...question.acceptedAnswers],
+            caseSensitive: question.caseSensitive,
+            points: question.points,
+        };
+    }
+
+    if (question.type === 'numeric') {
+        return {
+            type: 'numeric',
+            category: 'numerical',
+            title: question.title,
+            description: question.description,
+            imageUrl: question.imageUrl ?? '',
+            answer: question.answer ?? 0,
+            tolerance: question.tolerance,
+            points: question.points,
+        };
+    }
+
     return {
         type: 'code',
+        category: 'coding',
         title: question.title,
         description: question.description,
+        imageUrl: question.imageUrl ?? '',
         template: question.template,
         language: question.language,
         constraints: [...question.constraints],
@@ -77,7 +176,7 @@ const cloneQuestionForForm = (question: Question): Omit<Question, 'id'> => {
 interface QuestionModalProps {
     title: string;
     submitLabel: string;
-    initialType?: 'mcq' | 'code';
+    initialType?: Question['type'];
     initialQuestion?: Omit<Question, 'id'>;
     onClose: () => void;
     onSave: (question: Omit<Question, 'id'>) => Promise<void> | void;
@@ -94,7 +193,9 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
     lockType = false,
 }) => {
     const { theme } = useTheme();
-    const [qType, setQType] = useState<'mcq' | 'code'>(initialQuestion?.type ?? initialType);
+    const [selectedPreset, setSelectedPreset] = useState<QuestionPresetId>(
+        initialQuestion ? getPresetIdForQuestion(initialQuestion) : initialType === 'code' ? 'coding' : 'mcq',
+    );
     const [mcq, setMcq] = useState<Omit<McqQuestion, 'id'>>(
         initialQuestion?.type === 'mcq'
             ? {
@@ -104,6 +205,26 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
             : {
                 ...MCQ_TEMPLATE,
                 options: [...MCQ_TEMPLATE.options],
+            },
+    );
+    const [textQuestion, setTextQuestion] = useState<Omit<TextQuestion, 'id'>>(
+        initialQuestion?.type === 'text'
+            ? {
+                ...initialQuestion,
+                acceptedAnswers: [...initialQuestion.acceptedAnswers],
+            }
+            : {
+                ...TEXT_TEMPLATE,
+                acceptedAnswers: [...TEXT_TEMPLATE.acceptedAnswers],
+            },
+    );
+    const [numericQuestion, setNumericQuestion] = useState<Omit<NumericQuestion, 'id'>>(
+        initialQuestion?.type === 'numeric'
+            ? {
+                ...initialQuestion,
+            }
+            : {
+                ...NUMERIC_TEMPLATE,
             },
     );
     const [code, setCode] = useState<Omit<CodeQuestion, 'id'>>(
@@ -122,17 +243,45 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
             },
     );
     const [saving, setSaving] = useState(false);
+    const [imageError, setImageError] = useState('');
+    const activePreset = QUESTION_PRESETS.find((preset) => preset.id === selectedPreset) ?? QUESTION_PRESETS[0];
+    const activeType = activePreset.type;
+    const activeImageUrl = activeType === 'mcq'
+        ? mcq.imageUrl
+        : activeType === 'text'
+            ? textQuestion.imageUrl
+            : activeType === 'numeric'
+                ? numericQuestion.imageUrl
+                : code.imageUrl;
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setSaving(true);
 
-        if (qType === 'mcq') {
+        if (activeType === 'mcq') {
             if (!mcq.title.trim()) {
                 setSaving(false);
                 return;
             }
-            await onSave(mcq);
+            await onSave({
+                ...mcq,
+                category: selectedPreset === 'aptitude' ? 'aptitude' : 'mcq',
+            });
+        } else if (activeType === 'text') {
+            if (!textQuestion.title.trim()) {
+                setSaving(false);
+                return;
+            }
+            await onSave({
+                ...textQuestion,
+                acceptedAnswers: textQuestion.acceptedAnswers.map((answer) => answer.trim()).filter(Boolean),
+            });
+        } else if (activeType === 'numeric') {
+            if (!numericQuestion.title.trim()) {
+                setSaving(false);
+                return;
+            }
+            await onSave(numericQuestion);
         } else {
             if (!code.title.trim()) {
                 setSaving(false);
@@ -148,6 +297,35 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
     const updateOption = (i: number, val: string) =>
         setMcq((q) => ({ ...q, options: q.options.map((o, idx) => idx === i ? val : o) }));
 
+    const updateImage = (imageUrl: string) => {
+        setImageError('');
+        if (activeType === 'mcq') setMcq((q) => ({ ...q, imageUrl }));
+        else if (activeType === 'text') setTextQuestion((q) => ({ ...q, imageUrl }));
+        else if (activeType === 'numeric') setNumericQuestion((q) => ({ ...q, imageUrl }));
+        else setCode((q) => ({ ...q, imageUrl }));
+    };
+
+    const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+            setImageError('Please select an image file.');
+            return;
+        }
+        if (file.size > 1_500_000) {
+            setImageError('Image must be 1.5 MB or smaller.');
+            return;
+        }
+
+        try {
+            const dataUrl = await readFileAsDataUrl(file);
+            updateImage(dataUrl);
+        } catch (error) {
+            setImageError(error instanceof Error ? error.message : 'Failed to load image.');
+        }
+    };
+
     return (
         <div style={{ position: 'fixed', inset: 0, zIndex: 500, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '1rem', background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)', overflowY: 'auto' }}>
             <div className="anim-fade-up" style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', width: '100%', maxWidth: '560px', boxShadow: 'var(--shadow-lg)', margin: 'auto' }}>
@@ -156,20 +334,23 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
                     <button className="icon-btn" onClick={onClose}>x</button>
                 </div>
 
-                <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid var(--border)', display: 'flex', gap: '0.5rem' }}>
-                    {(['mcq', 'code'] as const).map((t) => (
+                <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid var(--border)', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {QUESTION_PRESETS.map((preset) => {
+                        const Icon = preset.icon;
+                        return (
                         <button
-                            key={t}
+                            key={preset.id}
                             type="button"
-                            onClick={() => !lockType && setQType(t)}
-                            className={`btn btn-sm ${qType === t ? 'btn-primary' : 'btn-outline'}`}
-                            style={{ gap: '0.375rem', opacity: lockType && qType !== t ? 0.6 : 1 }}
+                            onClick={() => !lockType && setSelectedPreset(preset.id)}
+                            className={`btn btn-sm ${selectedPreset === preset.id ? 'btn-primary' : 'btn-outline'}`}
+                            style={{ gap: '0.375rem', opacity: lockType && selectedPreset !== preset.id ? 0.6 : 1 }}
                             disabled={lockType}
                         >
-                            {t === 'mcq' ? <ListChecks size={13} /> : <Code2 size={13} />}
-                            {t === 'mcq' ? 'Multiple Choice' : 'Coding'}
+                            <Icon size={13} />
+                            {preset.label}
                         </button>
-                    ))}
+                        );
+                    })}
                 </div>
 
                 <form onSubmit={handleSubmit} style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -178,10 +359,20 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
                         <input
                             className="input"
                             placeholder="Short, clear question heading"
-                            value={qType === 'mcq' ? mcq.title : code.title}
-                            onChange={(e) => qType === 'mcq'
-                                ? setMcq((q) => ({ ...q, title: e.target.value }))
-                                : setCode((q) => ({ ...q, title: e.target.value }))}
+                            value={activeType === 'mcq'
+                                ? mcq.title
+                                : activeType === 'text'
+                                    ? textQuestion.title
+                                    : activeType === 'numeric'
+                                        ? numericQuestion.title
+                                        : code.title}
+                            onChange={(e) => {
+                                const value = e.target.value;
+                                if (activeType === 'mcq') setMcq((q) => ({ ...q, title: value }));
+                                else if (activeType === 'text') setTextQuestion((q) => ({ ...q, title: value }));
+                                else if (activeType === 'numeric') setNumericQuestion((q) => ({ ...q, title: value }));
+                                else setCode((q) => ({ ...q, title: value }));
+                            }}
                             required
                         />
                     </div>
@@ -192,12 +383,46 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
                             placeholder="Full description of the question..."
                             rows={3}
                             style={{ resize: 'vertical', fontFamily: 'Manrope, sans-serif' }}
-                            value={qType === 'mcq' ? mcq.description : code.description}
-                            onChange={(e) => qType === 'mcq'
-                                ? setMcq((q) => ({ ...q, description: e.target.value }))
-                                : setCode((q) => ({ ...q, description: e.target.value }))}
+                            value={activeType === 'mcq'
+                                ? mcq.description
+                                : activeType === 'text'
+                                    ? textQuestion.description
+                                    : activeType === 'numeric'
+                                        ? numericQuestion.description
+                                        : code.description}
+                            onChange={(e) => {
+                                const value = e.target.value;
+                                if (activeType === 'mcq') setMcq((q) => ({ ...q, description: value }));
+                                else if (activeType === 'text') setTextQuestion((q) => ({ ...q, description: value }));
+                                else if (activeType === 'numeric') setNumericQuestion((q) => ({ ...q, description: value }));
+                                else setCode((q) => ({ ...q, description: value }));
+                            }}
                         />
                     </div>
+                    {selectedPreset === 'aptitude' && (
+                        <div>
+                            <p className="label" style={{ marginBottom: '0.375rem' }}>Question Image</p>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                                <label className="btn btn-sm btn-outline" style={{ width: 'fit-content', gap: '0.375rem', cursor: 'pointer' }}>
+                                    <Upload size={13} /> Upload Image
+                                    <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageUpload} />
+                                </label>
+                                {imageError && <p className="t-small" style={{ color: 'var(--danger)' }}>{imageError}</p>}
+                                {activeImageUrl && (
+                                    <div style={{ border: '1px solid var(--border)', borderRadius: '10px', overflow: 'hidden', background: 'var(--surface)' }}>
+                                        <img
+                                            src={activeImageUrl}
+                                            alt="Question reference"
+                                            style={{ width: '100%', maxHeight: '220px', objectFit: 'contain', display: 'block', background: 'var(--bg-subtle)' }}
+                                        />
+                                        <div style={{ padding: '0.625rem', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end' }}>
+                                            <button type="button" className="btn btn-sm btn-ghost" onClick={() => updateImage('')}>Remove Image</button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
                     <div>
                         <p className="label" style={{ marginBottom: '0.375rem' }}>Points</p>
                         <input
@@ -205,14 +430,31 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
                             type="number"
                             min={1}
                             max={100}
-                            value={qType === 'mcq' ? mcq.points : code.points}
-                            onChange={(e) => qType === 'mcq'
-                                ? setMcq((q) => ({ ...q, points: Number(e.target.value) }))
-                                : setCode((q) => ({ ...q, points: Number(e.target.value) }))}
+                            value={activeType === 'mcq'
+                                ? mcq.points
+                                : activeType === 'text'
+                                    ? textQuestion.points
+                                    : activeType === 'numeric'
+                                        ? numericQuestion.points
+                                        : code.points}
+                            onChange={(e) => {
+                                const value = Number(e.target.value);
+                                if (activeType === 'mcq') setMcq((q) => ({ ...q, points: value }));
+                                else if (activeType === 'text') setTextQuestion((q) => ({ ...q, points: value }));
+                                else if (activeType === 'numeric') setNumericQuestion((q) => ({ ...q, points: value }));
+                                else setCode((q) => ({ ...q, points: value }));
+                            }}
                         />
                     </div>
 
-                    {qType === 'mcq' && (
+                    {activeType === 'mcq' && (
+                        <div>
+                            <p className="label" style={{ marginBottom: '0.375rem' }}>Category</p>
+                            <input className="input" value={selectedPreset === 'aptitude' ? 'Aptitude' : 'Multiple Choice'} readOnly />
+                        </div>
+                    )}
+
+                    {activeType === 'mcq' && (
                         <div>
                             <p className="label" style={{ marginBottom: '0.5rem' }}>Answer Options - click radio to mark correct</p>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -231,7 +473,55 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
                             </div>
                         </div>
                     )}
-                    {qType === 'code' && (
+                    {activeType === 'text' && (
+                        <>
+                            <div>
+                                <p className="label" style={{ marginBottom: '0.375rem' }}>Accepted Answers</p>
+                                <textarea
+                                    className="input"
+                                    placeholder="One accepted answer per line"
+                                    rows={3}
+                                    style={{ resize: 'vertical', fontFamily: 'JetBrains Mono, monospace', fontSize: '12px' }}
+                                    value={textQuestion.acceptedAnswers.join('\n')}
+                                    onChange={(e) => setTextQuestion((q) => ({ ...q, acceptedAnswers: e.target.value.split('\n') }))}
+                                />
+                            </div>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '12px', fontWeight: 700, color: 'var(--text-2)' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={textQuestion.caseSensitive}
+                                    onChange={(e) => setTextQuestion((q) => ({ ...q, caseSensitive: e.target.checked }))}
+                                />
+                                Match case exactly
+                            </label>
+                        </>
+                    )}
+                    {activeType === 'numeric' && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                            <div>
+                                <p className="label" style={{ marginBottom: '0.375rem' }}>Correct Answer</p>
+                                <input
+                                    className="input"
+                                    type="number"
+                                    step="any"
+                                    value={numericQuestion.answer ?? 0}
+                                    onChange={(e) => setNumericQuestion((q) => ({ ...q, answer: Number(e.target.value) }))}
+                                />
+                            </div>
+                            <div>
+                                <p className="label" style={{ marginBottom: '0.375rem' }}>Tolerance</p>
+                                <input
+                                    className="input"
+                                    type="number"
+                                    min={0}
+                                    step="any"
+                                    value={numericQuestion.tolerance}
+                                    onChange={(e) => setNumericQuestion((q) => ({ ...q, tolerance: Math.max(0, Number(e.target.value)) }))}
+                                />
+                            </div>
+                        </div>
+                    )}
+                    {activeType === 'code' && (
                         <>
                             <div>
                                 <p className="label" style={{ marginBottom: '0.375rem' }}>Language</p>
@@ -458,7 +748,7 @@ const ImportQModal: React.FC<ImportQModalProps> = ({ testId, onClose }) => {
                         <div style={{ marginTop: '1rem', padding: '0.875rem', border: '1px solid var(--border)', background: 'var(--bg-subtle)', borderRadius: '10px' }}>
                             <p className="label" style={{ marginBottom: '0.5rem' }}>Expected columns / fields</p>
                             <p className="t-small" style={{ color: 'var(--text-muted)' }}>
-                                `type`, `title`, `description`, `points`, `options`, `answer`, `language`, `template`, `constraints`, `examples`, `testCases`
+                                `type`, `category`, `title`, `description`, `points`, `options`, `answer`, `language`, `template`, `constraints`, `examples`, `testCases`
                             </p>
                             <p className="t-small" style={{ color: 'var(--text-muted)', marginTop: '0.5rem' }}>
                                 Use `|` to split list values. For examples or test cases, use `input =&gt; output` and separate multiple items with `||`.
@@ -468,6 +758,7 @@ const ImportQModal: React.FC<ImportQModalProps> = ({ testId, onClose }) => {
                         <div style={{ marginTop: '1rem', padding: '0.875rem', border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: '10px' }}>
                             <p className="label" style={{ marginBottom: '0.5rem' }}>Document format example</p>
                             <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'JetBrains Mono, monospace', fontSize: '12px', color: 'var(--text-2)', lineHeight: 1.5 }}>{`Type: mcq
+Category: aptitude
 Title: HTML stands for?
 Description: Pick the correct expansion.
 Options:
@@ -522,7 +813,7 @@ TestCases: hidden: 4 6 => 10`}</pre>
                                 questions.map((question, index) => (
                                     <div key={`${question.title}-${index}`} style={{ border: '1px solid var(--border)', borderRadius: '10px', padding: '0.75rem', background: 'var(--surface)' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
-                                            <span className={`badge ${question.type === 'mcq' ? 'badge-success' : 'badge-warning'}`}>{question.type === 'mcq' ? 'MCQ' : 'Code'}</span>
+                                            <span className={`badge ${question.type === 'mcq' ? 'badge-success' : 'badge-warning'}`}>{getQuestionCategoryLabel(question as Question)}</span>
                                             <span className="badge badge-neutral">{question.points} pts</span>
                                             {question.type === 'code' && <span className="badge badge-neutral">{question.language}</span>}
                                         </div>
@@ -580,7 +871,7 @@ const QCard: React.FC<QCardProps> = ({ q, onDelete, onEdit, index, total: _total
             <div style={{ padding: '0.875rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }} onClick={() => setOpen((o) => !o)}>
                 <GripVertical size={16} style={{ color: 'var(--border-strong)', flexShrink: 0 }} />
                 <span className="badge badge-neutral" style={{ flexShrink: 0 }}>Q{index + 1}</span>
-                <span className={`badge ${q.type === 'mcq' ? 'badge-success' : 'badge-warning'}`} style={{ flexShrink: 0 }}>{q.type === 'mcq' ? 'MCQ' : 'Code'}</span>
+                <span className={`badge ${q.type === 'mcq' ? 'badge-success' : q.type === 'code' ? 'badge-warning' : 'badge-neutral'}`} style={{ flexShrink: 0 }}>{getQuestionCategoryLabel(q)}</span>
                 <span className="t-h3" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.title || <em style={{ color: 'var(--text-muted)', fontWeight: 400 }}>Untitled</em>}</span>
                 <span className="t-small" style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{q.points} pts</span>
                 <button className="icon-btn" style={{ color: 'var(--text-muted)', flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); onEdit(); }}>
@@ -598,6 +889,11 @@ const QCard: React.FC<QCardProps> = ({ q, onDelete, onEdit, index, total: _total
                             <Pencil size={13} /> Edit Question
                         </button>
                     </div>
+                    {q.imageUrl && (
+                        <div style={{ marginBottom: '0.75rem', border: '1px solid var(--border)', borderRadius: '10px', overflow: 'hidden', background: 'var(--surface)' }}>
+                            <img src={q.imageUrl} alt={`${q.title} reference`} style={{ width: '100%', maxHeight: '260px', objectFit: 'contain', display: 'block', background: 'var(--bg-subtle)' }} />
+                        </div>
+                    )}
                     {q.description && <p className="t-body" style={{ marginBottom: '0.75rem' }}>{q.description}</p>}
                     {q.type === 'mcq' && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
@@ -617,6 +913,24 @@ const QCard: React.FC<QCardProps> = ({ q, onDelete, onEdit, index, total: _total
                             <p className="t-small" style={{ color: 'var(--text-muted)' }}>
                                 {(q.testCases ?? []).filter((testCase) => testCase.hidden).length} hidden judge cases
                             </p>
+                        </div>
+                    )}
+                    {q.type === 'text' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            <p className="t-small" style={{ color: 'var(--text-muted)' }}>
+                                {q.acceptedAnswers.length} accepted answer{q.acceptedAnswers.length !== 1 ? 's' : ''}
+                            </p>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
+                                {q.acceptedAnswers.map((answer) => (
+                                    <span key={answer} className="badge badge-neutral">{answer}</span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {q.type === 'numeric' && (
+                        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                            <span className="badge badge-neutral">Answer: {q.answer ?? 0}</span>
+                            <span className="badge badge-neutral">Tolerance: {q.tolerance}</span>
                         </div>
                     )}
                 </div>
@@ -697,7 +1011,7 @@ const TestEditor: React.FC = () => {
                         <div style={{ textAlign: 'center', padding: '3rem 1rem', border: '2px dashed var(--border)', borderRadius: '10px', color: 'var(--text-muted)' }}>
                             <Code2 size={48} className="antigravity" style={{ margin: '0 auto 0.75rem', color: 'var(--accent)', opacity: 0.8 }} />
                             <p className="t-h3" style={{ marginBottom: '0.5rem' }}>No questions yet</p>
-                            <p className="t-body" style={{ marginBottom: '1.25rem' }}>Add MCQ manually or import a full set from a spreadsheet or document.</p>
+                            <p className="t-body" style={{ marginBottom: '1.25rem' }}>Add MCQ, aptitude, short-answer, numerical, or coding questions manually or import a file.</p>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                                 <button className="btn btn-md btn-outline" style={{ gap: '0.375rem' }} onClick={() => setShowImport(true)}>
                                     <Upload size={14} /> Import Questions
@@ -757,10 +1071,12 @@ const TestEditor: React.FC = () => {
                     <div className="card" style={{ padding: '1rem' }}>
                         <p className="label" style={{ color: 'var(--text-muted)', marginBottom: '0.75rem' }}>Summary</p>
                         {[
-                            { label: 'MCQ', value: test.questions.filter((q) => q.type === 'mcq').length },
-                            { label: 'Coding', value: test.questions.filter((q) => q.type === 'code').length },
+                            ...(['mcq', 'aptitude', 'saq', 'numerical', 'coding'] as QuestionCategory[]).map((category) => ({
+                                label: QUESTION_CATEGORY_LABELS[category],
+                                value: test.questions.filter((q) => q.category === category).length,
+                            })),
                             { label: 'Total Points', value: totalPoints },
-                        ].map(({ label, value }) => (
+                        ].filter(({ value, label }) => label === 'Total Points' || value > 0).map(({ label, value }) => (
                             <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.4rem 0', borderBottom: '1px solid var(--border)' }}>
                                 <span className="t-small" style={{ color: 'var(--text-muted)' }}>{label}</span>
                                 <span style={{ fontWeight: 800, fontSize: '0.85rem', color: 'var(--text)' }}>{value}</span>

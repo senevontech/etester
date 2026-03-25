@@ -5,10 +5,11 @@ import { useOrg } from './OrgContext';
 
 export interface AnswerPayload {
     questionId: string;
-    type: 'mcq' | 'code';
+    type: 'mcq' | 'code' | 'text' | 'numeric';
     choice?: number;
     code?: string;
     language?: string;
+    response?: string;
     pointsEarned: number;
 }
 
@@ -42,7 +43,7 @@ interface ResultContextValue {
         attemptId: string,
         answers: AnswerPayload[],
         integrityEvents: IntegrityEvent[]
-    ) => Promise<Submission | null>;
+    ) => Promise<Submission>;
     getStudentSubmissions: (studentId: string) => Submission[];
     getTestSubmissions: (testId: string) => Submission[];
     getSubmission: (id: string) => Submission | undefined;
@@ -109,26 +110,24 @@ export const ResultProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         answers: AnswerPayload[],
         integrityEvents: IntegrityEvent[]
     ) => {
-        if (!activeOrgId || !attemptId) return null;
-
-        try {
-            const data = await apiRequest<SubmissionResponse>('/submissions', {
-                method: 'POST',
-                body: {
-                    test_id: testId,
-                    org_id: activeOrgId,
-                    attempt_id: attemptId,
-                    answers,
-                    integrity_events: integrityEvents,
-                },
-            });
-
-            const created = rowToSubmission(data.submission);
-            setSubmissions(prev => [created, ...prev]);
-            return created;
-        } catch {
-            return null;
+        if (!activeOrgId || !attemptId) {
+            throw new Error('Missing active organization or attempt.');
         }
+
+        const data = await apiRequest<SubmissionResponse>('/submissions', {
+            method: 'POST',
+            body: {
+                test_id: testId,
+                org_id: activeOrgId,
+                attempt_id: attemptId,
+                answers,
+                integrity_events: integrityEvents,
+            },
+        });
+
+        const created = rowToSubmission(data.submission);
+        setSubmissions(prev => [created, ...prev]);
+        return created;
     }, [activeOrgId]);
 
     const getStudentSubmissions = useCallback(

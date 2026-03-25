@@ -16,6 +16,7 @@ const SUPPORTED_SPREADSHEET_EXTENSIONS = new Set(['xlsx', 'xls', 'csv']);
 const SUPPORTED_DOCUMENT_EXTENSIONS = new Set(['txt', 'md', 'doc', 'docx', 'pdf', 'json', 'rtf']);
 const HEADER_ALIASES = {
     type: ['type', 'questiontype'],
+    category: ['category', 'kind'],
     title: ['title', 'question', 'prompt', 'name'],
     description: ['description', 'details', 'body', 'statement'],
     points: ['points', 'marks', 'score'],
@@ -165,6 +166,14 @@ const inferQuestionType = (record: Record<string, unknown>) => {
     return language || template || testCases ? 'code' : 'mcq';
 };
 
+const inferQuestionCategory = (record: Record<string, unknown>, type: 'mcq' | 'code') => {
+    const explicit = normalizeCell(getFirstValue(record, HEADER_ALIASES.category)).toLowerCase();
+    if (explicit === 'aptitude') return 'aptitude';
+    if (explicit === 'coding') return 'coding';
+    if (explicit === 'mcq') return 'mcq';
+    return type === 'code' ? 'coding' : 'mcq';
+};
+
 const isEmptyRecord = (record: Record<string, unknown>) =>
     Object.values(record).every((value) => normalizeCell(value) === '');
 
@@ -176,6 +185,7 @@ const buildQuestionFromRecord = (
     if (isEmptyRecord(record)) return null;
 
     const type = inferQuestionType(record);
+    const category = inferQuestionCategory(record, type);
     const title = normalizeCell(getFirstValue(record, HEADER_ALIASES.title));
     const description = normalizeCell(getFirstValue(record, HEADER_ALIASES.description));
     const points = parsePositiveInt(getFirstValue(record, HEADER_ALIASES.points), type === 'code' ? 20 : 10);
@@ -198,6 +208,7 @@ const buildQuestionFromRecord = (
 
         return {
             type: 'mcq',
+            category,
             title,
             description,
             options,
@@ -218,6 +229,7 @@ const buildQuestionFromRecord = (
 
     return {
         type: 'code',
+        category: 'coding',
         title,
         description,
         template,

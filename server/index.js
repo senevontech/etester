@@ -229,9 +229,31 @@ const serializeOrganizationForRole = (row, role) => ({
     created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
 });
 
+const getDefaultCategoryForType = (type) => {
+    if (type === 'code') return 'coding';
+    if (type === 'text') return 'saq';
+    if (type === 'numeric') return 'numerical';
+    return 'mcq';
+};
+
+const normalizeAcceptedAnswers = (answers) => {
+    if (!Array.isArray(answers)) return [];
+
+    return answers
+        .map((answer) => String(answer || '').trim())
+        .filter(Boolean)
+        .slice(0, 20);
+};
+
 const mapQuestionRow = (row) => ({
     ...row,
+    category: row.category ?? getDefaultCategoryForType(row.type),
+    image_url: row.image_url ?? null,
     options: row.options ?? null,
+    accepted_answers: row.accepted_answers ?? null,
+    case_sensitive: Boolean(row.case_sensitive),
+    numeric_answer: typeof row.numeric_answer === 'number' ? row.numeric_answer : row.numeric_answer === null ? null : Number(row.numeric_answer),
+    numeric_tolerance: typeof row.numeric_tolerance === 'number' ? row.numeric_tolerance : Number(row.numeric_tolerance ?? 0),
     constraints: row.constraints ?? null,
     examples: row.examples ?? null,
     test_cases: row.test_cases ?? null,
@@ -247,6 +269,22 @@ const serializeQuestionForRole = (row, role) => {
         return {
             ...question,
             answer: undefined,
+        };
+    }
+
+    if (question.type === 'text') {
+        return {
+            ...question,
+            accepted_answers: undefined,
+            case_sensitive: undefined,
+        };
+    }
+
+    if (question.type === 'numeric') {
+        return {
+            ...question,
+            numeric_answer: undefined,
+            numeric_tolerance: undefined,
         };
     }
 
@@ -416,12 +454,18 @@ const normalizeQuestionInput = (question, position) => ({
     id: randomUUID(),
     test_id: question.testId,
     type: question.type,
+    category: String(question.category || getDefaultCategoryForType(question.type)).trim().toLowerCase() || getDefaultCategoryForType(question.type),
     title: String(question.title || '').trim(),
     description: String(question.description || ''),
+    image_url: question.image_url !== undefined || question.imageUrl !== undefined ? String((question.image_url ?? question.imageUrl) || '').slice(0, 2_000_000) : null,
     points: Number(question.points || 0),
     position,
     options: question.type === 'mcq' ? JSON.stringify(question.options ?? []) : null,
     answer: question.type === 'mcq' ? Number(question.answer ?? 0) : null,
+    accepted_answers: question.type === 'text' ? JSON.stringify(normalizeAcceptedAnswers(question.accepted_answers ?? question.acceptedAnswers)) : null,
+    case_sensitive: question.type === 'text' ? Boolean(question.case_sensitive ?? question.caseSensitive) : false,
+    numeric_answer: question.type === 'numeric' ? Number(question.numeric_answer ?? question.answer ?? 0) : null,
+    numeric_tolerance: question.type === 'numeric' ? Math.max(0, Number(question.numeric_tolerance ?? question.tolerance ?? 0)) : 0,
     template: question.type === 'code' ? String(question.template || '') : null,
     language: question.type === 'code' ? String(question.language || 'python') : null,
     constraints: question.type === 'code' ? JSON.stringify(question.constraints ?? []) : null,
@@ -433,24 +477,32 @@ const normalizeQuestionInput = (question, position) => ({
 const insertQuestionRow = async (client, question) => {
     const result = await client.query(`
         INSERT INTO questions (
-            id, test_id, type, title, description, points, position,
-            options, answer, template, language, constraints, examples, test_cases, created_at
+            id, test_id, type, category, title, description, image_url, points, position,
+            options, answer, accepted_answers, case_sensitive, numeric_answer, numeric_tolerance,
+            template, language, constraints, examples, test_cases, created_at
         )
         VALUES (
-            $1, $2, $3, $4, $5, $6, $7,
-            $8::jsonb, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15
+            $1, $2, $3, $4, $5, $6, $7, $8, $9,
+            $10::jsonb, $11, $12::jsonb, $13, $14, $15,
+            $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21
         )
         RETURNING *
     `, [
         question.id,
         question.test_id,
         question.type,
+        question.category,
         question.title,
         question.description,
+        question.image_url,
         question.points,
         question.position,
         question.options,
         question.answer,
+        question.accepted_answers,
+        question.case_sensitive,
+        question.numeric_answer,
+        question.numeric_tolerance,
         question.template,
         question.language,
         question.constraints,
@@ -495,6 +547,11 @@ const normalizeOutputForComparison = (value) => String(value || '')
     .join('\n')
     .trim();
 
+const normalizeTextAnswer = (value, caseSensitive = false) => {
+    const normalized = String(value || '').replace(/\r\n/g, '\n').trim();
+    return caseSensitive ? normalized : normalized.toLowerCase();
+};
+
 const evaluateCodeAnswer = async (question, submitted) => {
     const code = typeof submitted.code === 'string' ? submitted.code.slice(0, 50000) : '';
     const language = typeof submitted.language === 'string' ? submitted.language : (question.language ?? 'python');
@@ -527,7 +584,10 @@ const evaluateCodeAnswer = async (question, submitted) => {
         try {
             result = await executeSnippet(language, code, { stdin: testCase.input });
         } catch (error) {
-            throw new HttpError(503, error instanceof Error ? error.message : 'Code evaluation is currently unavailable.');
+            return {
+                ...normalized,
+                evaluationError: error instanceof Error ? error.message : 'Code evaluation is currently unavailable.',
+            };
         }
 
         if (result.run.code !== 0) continue;
@@ -540,6 +600,48 @@ const evaluateCodeAnswer = async (question, submitted) => {
     }
 
     normalized.pointsEarned = Math.round((question.points * passedCount) / effectiveCases.length);
+    return normalized;
+};
+
+const evaluateTextAnswer = (question, submitted) => {
+    const response = String(submitted.response || '').trim();
+    const normalized = {
+        questionId: question.id,
+        type: question.type,
+        pointsEarned: 0,
+        response,
+    };
+
+    if (!response) return normalized;
+
+    const acceptedAnswers = normalizeAcceptedAnswers(question.accepted_answers);
+    const submittedValue = normalizeTextAnswer(response, question.case_sensitive);
+    const isMatch = acceptedAnswers.some((answer) => normalizeTextAnswer(answer, question.case_sensitive) === submittedValue);
+
+    if (isMatch) normalized.pointsEarned = question.points;
+    return normalized;
+};
+
+const evaluateNumericAnswer = (question, submitted) => {
+    const response = String(submitted.response || '').trim();
+    const normalized = {
+        questionId: question.id,
+        type: question.type,
+        pointsEarned: 0,
+        response,
+    };
+
+    if (!response) return normalized;
+
+    const submittedValue = Number(response);
+    const expectedValue = Number(question.numeric_answer);
+    const tolerance = Math.max(0, Number(question.numeric_tolerance || 0));
+
+    if (!Number.isFinite(submittedValue) || !Number.isFinite(expectedValue)) return normalized;
+    if (Math.abs(submittedValue - expectedValue) <= tolerance) {
+        normalized.pointsEarned = question.points;
+    }
+
     return normalized;
 };
 
@@ -569,6 +671,20 @@ const buildSubmissionAnswers = async (questionRows, incomingAnswers) => {
             if (choice === question.answer) {
                 normalized.pointsEarned = question.points;
             }
+            score += normalized.pointsEarned;
+            answers.push(normalized);
+            continue;
+        }
+
+        if (question.type === 'text') {
+            const normalized = evaluateTextAnswer(question, submitted);
+            score += normalized.pointsEarned;
+            answers.push(normalized);
+            continue;
+        }
+
+        if (question.type === 'numeric') {
+            const normalized = evaluateNumericAnswer(question, submitted);
             score += normalized.pointsEarned;
             answers.push(normalized);
             continue;
@@ -1215,6 +1331,8 @@ const handleRequest = async (req, res) => {
                 metadata: {
                     importedCount: created.length,
                     mcqCount: questions.filter((question) => question.type === 'mcq').length,
+                    textCount: questions.filter((question) => question.type === 'text').length,
+                    numericCount: questions.filter((question) => question.type === 'numeric').length,
                     codeCount: questions.filter((question) => question.type === 'code').length,
                 },
                 ipAddress: requestIp,
@@ -1369,21 +1487,43 @@ const handleRequest = async (req, res) => {
                     SET
                         title = COALESCE($1, title),
                         description = COALESCE($2, description),
-                        points = COALESCE($3, points),
-                        options = CASE WHEN $4::jsonb IS NULL THEN options ELSE $4::jsonb END,
-                        answer = COALESCE($5, answer),
-                        template = COALESCE($6, template),
-                        language = COALESCE($7, language),
-                        constraints = CASE WHEN $8::jsonb IS NULL THEN constraints ELSE $8::jsonb END,
-                        examples = CASE WHEN $9::jsonb IS NULL THEN examples ELSE $9::jsonb END,
-                        test_cases = CASE WHEN $10::jsonb IS NULL THEN test_cases ELSE $10::jsonb END
-                    WHERE id = $11
+                        image_url = COALESCE($3, image_url),
+                        points = COALESCE($4, points),
+                        category = COALESCE($5, category),
+                        options = CASE WHEN type = 'mcq' AND $6::jsonb IS NOT NULL THEN $6::jsonb ELSE options END,
+                        accepted_answers = CASE WHEN type = 'text' AND $7::jsonb IS NOT NULL THEN $7::jsonb ELSE accepted_answers END,
+                        case_sensitive = CASE WHEN type = 'text' THEN COALESCE($8, case_sensitive) ELSE case_sensitive END,
+                        numeric_answer = CASE WHEN type = 'numeric' THEN COALESCE($9, numeric_answer) ELSE numeric_answer END,
+                        numeric_tolerance = CASE WHEN type = 'numeric' THEN COALESCE($10, numeric_tolerance) ELSE numeric_tolerance END,
+                        answer = CASE WHEN type = 'mcq' THEN COALESCE($11, answer) ELSE answer END,
+                        template = CASE WHEN type = 'code' THEN COALESCE($12, template) ELSE template END,
+                        language = CASE WHEN type = 'code' THEN COALESCE($13, language) ELSE language END,
+                        constraints = CASE WHEN type = 'code' AND $14::jsonb IS NOT NULL THEN $14::jsonb ELSE constraints END,
+                        examples = CASE WHEN type = 'code' AND $15::jsonb IS NOT NULL THEN $15::jsonb ELSE examples END,
+                        test_cases = CASE WHEN type = 'code' AND $16::jsonb IS NOT NULL THEN $16::jsonb ELSE test_cases END
+                    WHERE id = $17
                     RETURNING *
                 `, [
                     body.title !== undefined ? String(body.title).trim() : null,
                     body.description !== undefined ? String(body.description) : null,
+                    body.image_url !== undefined || body.imageUrl !== undefined
+                        ? String((body.image_url ?? body.imageUrl) || '').slice(0, 2_000_000)
+                        : null,
                     body.points !== undefined ? Number(body.points) : null,
+                    body.category !== undefined ? String(body.category).trim().toLowerCase() : null,
                     body.options !== undefined ? JSON.stringify(Array.isArray(body.options) ? body.options : []) : null,
+                    body.accepted_answers !== undefined || body.acceptedAnswers !== undefined
+                        ? JSON.stringify(normalizeAcceptedAnswers(body.accepted_answers ?? body.acceptedAnswers))
+                        : null,
+                    body.case_sensitive !== undefined || body.caseSensitive !== undefined
+                        ? Boolean(body.case_sensitive ?? body.caseSensitive)
+                        : null,
+                    body.numeric_answer !== undefined || body.answer !== undefined
+                        ? Number(body.numeric_answer ?? body.answer)
+                        : null,
+                    body.numeric_tolerance !== undefined || body.tolerance !== undefined
+                        ? Math.max(0, Number(body.numeric_tolerance ?? body.tolerance))
+                        : null,
                     body.answer !== undefined ? Number(body.answer) : null,
                     body.template !== undefined ? String(body.template) : null,
                     body.language !== undefined ? String(body.language) : null,

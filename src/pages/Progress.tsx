@@ -9,7 +9,7 @@ import {
     Award, TrendingUp,
 } from 'lucide-react';
 import type { Submission } from '../context/ResultContext';
-import type { CodeQuestion } from '../types';
+import { QUESTION_CATEGORY_LABELS } from '../types';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ const integrityColor = (score: number) =>
 interface SubCardProps {
     sub: Submission;
     testTitle: string;
-    questions: { id: string; title: string; points: number; type: string }[];
+    questions: { id: string; title: string; points: number; type: string; category: keyof typeof QUESTION_CATEGORY_LABELS }[];
 }
 
 const SubCard: React.FC<SubCardProps> = ({ sub, testTitle, questions }) => {
@@ -141,7 +141,7 @@ const SubCard: React.FC<SubCardProps> = ({ sub, testTitle, questions }) => {
                                                 <p style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>
                                                     {ans.pointsEarned} / {q?.points ?? '?'} pts
                                                     <span style={{ marginLeft: '0.4rem', color: 'var(--text-placeholder)' }}>
-                                                        [{ans.type === 'code' ? (ans as any).language ?? 'code' : 'mcq'}]
+                                                        [{q ? QUESTION_CATEGORY_LABELS[q.category] : ans.type}]
                                                     </span>
                                                 </p>
                                             </div>
@@ -283,6 +283,7 @@ const Progress: React.FC = () => {
                                     title: q.title,
                                     points: q.points,
                                     type: q.type,
+                                    category: q.category,
                                 }));
                                 return (
                                     <SubCard

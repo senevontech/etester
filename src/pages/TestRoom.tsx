@@ -9,7 +9,7 @@ import { useAuth } from '../context/AuthContext';
 import { useResults } from '../context/ResultContext';
 import { useProctoring } from '../hooks/useProctoring';
 import ProctorOverlay from '../components/Proctoring/ProctorOverlay';
-import { CodeQuestion, AnswerPayload, IntegrityEvent } from '../types';
+import { CodeQuestion, AnswerPayload, IntegrityEvent, QUESTION_CATEGORY_LABELS } from '../types';
 import { executeCode } from '../utils/piston';
 import { apiRequest, ApiError } from '../lib/api';
 
@@ -32,6 +32,8 @@ interface AttemptResponse {
 
 const formatTime = (s: number) =>
     `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
+const getQuestionChipLabel = (question: { category: keyof typeof QUESTION_CATEGORY_LABELS }) => QUESTION_CATEGORY_LABELS[question.category];
 
 const TestRoom: React.FC = () => {
     const { testId } = useParams<{ testId: string }>();
@@ -58,7 +60,7 @@ const TestRoom: React.FC = () => {
     const [currentLang, setCurrentLang] = useState<string>('typescript');
     const [fullscreenReady, setFullscreenReady] = useState(false);
     const [showFsWarning, setShowFsWarning] = useState(false);
-    const [showTabWarning, setShowTabWarning] = useState(false);
+    const [tabWarningLevel, setTabWarningLevel] = useState<0 | 1 | 2>(0);
 
     const q = test?.questions[idx];
     const total = test?.questions.length ?? 0;
@@ -212,6 +214,7 @@ const TestRoom: React.FC = () => {
                     choice: undefined,
                     code: question.type === 'code' ? (question as CodeQuestion).template : undefined,
                     language: question.type === 'code' ? (question as CodeQuestion).language : undefined,
+                    response: question.type === 'text' || question.type === 'numeric' ? '' : undefined,
                 };
             }
         });
@@ -234,6 +237,14 @@ const TestRoom: React.FC = () => {
         setAnswers((prev) => ({
             ...prev,
             [q.id]: { ...prev[q.id], choice },
+        }));
+    };
+
+    const updateResponse = (response: string) => {
+        if (!q) return;
+        setAnswers((prev) => ({
+            ...prev,
+            [q.id]: { ...prev[q.id], response },
         }));
     };
 
@@ -260,11 +271,11 @@ const TestRoom: React.FC = () => {
         }
     };
 
-    const submit = async () => {
+    const submit = async (reason?: string) => {
         if (!test || !user || !attemptId) return;
         if (finishing || attemptExpired) return;
 
-        setSubmitError('');
+        setSubmitError(reason ?? '');
         setFinishing(true);
 
         const finalAnswers = Object.values(answers).map((answer) => {
@@ -274,19 +285,20 @@ const TestRoom: React.FC = () => {
             return {
                 ...answer,
                 language: question.type === 'code' ? answer.language ?? (question as CodeQuestion).language : answer.language,
+                response: question.type === 'text' || question.type === 'numeric' ? (answer.response ?? '').trim() : answer.response,
             };
         });
 
-        const submission = await submitTest(
-            test.id,
-            attemptId,
-            finalAnswers,
-            violations,
-        );
-
-        if (!submission) {
+        try {
+            await submitTest(
+                test.id,
+                attemptId,
+                finalAnswers,
+                violations,
+            );
+        } catch (error) {
             setFinishing(false);
-            setSubmitError('Submission failed. Please try again.');
+            setSubmitError(error instanceof Error ? error.message : 'Submission failed. Please try again.');
             return;
         }
 
@@ -303,7 +315,7 @@ const TestRoom: React.FC = () => {
         if (fullscreenExitCount === 1) {
             setShowFsWarning(true);
         } else {
-            void submitRef.current();
+            void submitRef.current('Attempt submitted after repeated fullscreen exits.');
         }
     }, [fullscreenExitCount]);
 
@@ -312,16 +324,21 @@ const TestRoom: React.FC = () => {
         if (isFullscreen) setShowFsWarning(false);
     }, [isFullscreen]);
 
-    // Tab-switch enforcement: warn on 1st, auto-submit on 2nd
+    // Tab-switch enforcement: warn on 1st, strict warning on 2nd, auto-submit on 3rd
     useEffect(() => {
         if (tabSwitchCount === 0) return;
         if (tabSwitchCount === 1) {
-            setShowTabWarning(true);
-            const t = setTimeout(() => setShowTabWarning(false), 6000);
+            setTabWarningLevel(1);
+            const t = setTimeout(() => setTabWarningLevel(0), 5000);
             return () => clearTimeout(t);
-        } else {
-            void submitRef.current();
         }
+        if (tabSwitchCount === 2) {
+            setTabWarningLevel(2);
+            const t = setTimeout(() => setTabWarningLevel(0), 7000);
+            return () => clearTimeout(t);
+        }
+        setTabWarningLevel(0);
+        void submitRef.current('Attempt submitted for unauthorized tab switching after 3 violations.');
     }, [tabSwitchCount]);
 
     if (!test || !user) return (
@@ -406,7 +423,9 @@ const TestRoom: React.FC = () => {
                                     const state = answers[question.id];
                                     const isAnswered = state?.type === 'mcq'
                                         ? state.choice !== undefined
-                                        : (state?.code && state.code !== (question as CodeQuestion).template);
+                                        : state?.type === 'code'
+                                            ? Boolean(state.code && state.code !== (question as CodeQuestion).template)
+                                            : Boolean(state?.response?.trim());
                                     return (
                                         <button
                                             key={question.id}
@@ -437,10 +456,15 @@ const TestRoom: React.FC = () => {
                         {q && (
                             <>
                                 <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.875rem', flexWrap: 'wrap' }}>
-                                    <span className={`badge ${q.type === 'mcq' ? 'badge-success' : 'badge-warning'}`}>{q.type === 'mcq' ? 'MCQ' : 'Coding'}</span>
+                                    <span className={`badge ${q.type === 'mcq' ? 'badge-success' : q.type === 'code' ? 'badge-warning' : 'badge-neutral'}`}>{getQuestionChipLabel(q)}</span>
                                     <span className="badge badge-neutral">{q.points} pts</span>
                                 </div>
                                 <h1 className="t-h2" style={{ marginBottom: '0.875rem', fontSize: '1.1rem' }}>{q.title}</h1>
+                                {q.imageUrl && (
+                                    <div style={{ marginBottom: '1rem', border: '1px solid var(--border)', borderRadius: '10px', overflow: 'hidden', background: 'var(--surface)' }}>
+                                        <img src={q.imageUrl} alt={`${q.title} reference`} style={{ width: '100%', maxHeight: '280px', objectFit: 'contain', display: 'block', background: 'var(--bg-subtle)' }} />
+                                    </div>
+                                )}
                                 <p className="t-body" style={{ marginBottom: '1.5rem', whiteSpace: 'pre-line' }}>{q.description}</p>
 
                                 {q.type === 'code' && (
@@ -492,6 +516,32 @@ const TestRoom: React.FC = () => {
                                                 <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-2)' }}>{option}</span>
                                             </div>
                                         ))}
+                                    </div>
+                                )}
+                                {q.type === 'text' && (
+                                    <div>
+                                        <p className="label" style={{ marginBottom: '0.375rem' }}>Your Answer</p>
+                                        <textarea
+                                            className="input"
+                                            rows={4}
+                                            placeholder="Write a short answer"
+                                            value={activeAns?.response ?? ''}
+                                            onChange={(e) => updateResponse(e.target.value)}
+                                            style={{ resize: 'vertical', fontFamily: 'Manrope, sans-serif' }}
+                                        />
+                                    </div>
+                                )}
+                                {q.type === 'numeric' && (
+                                    <div>
+                                        <p className="label" style={{ marginBottom: '0.375rem' }}>Your Answer</p>
+                                        <input
+                                            className="input"
+                                            type="number"
+                                            step="any"
+                                            placeholder="Enter a numeric answer"
+                                            value={activeAns?.response ?? ''}
+                                            onChange={(e) => updateResponse(e.target.value)}
+                                        />
                                     </div>
                                 )}
                             </>
@@ -561,8 +611,8 @@ const TestRoom: React.FC = () => {
                         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '3rem', textAlign: 'center' }}>
                             <div>
                                 <TerminalSquare size={48} style={{ color: 'var(--border-strong)', margin: '0 auto 1rem' }} />
-                                <h2 className="t-h3" style={{ marginBottom: '0.5rem' }}>Multiple Choice Question</h2>
-                                <p className="t-body">Please select your answer from the panel on the left.<br />Your choice will be saved automatically.</p>
+                                <h2 className="t-h3" style={{ marginBottom: '0.5rem' }}>{getQuestionChipLabel(q)}</h2>
+                                <p className="t-body">Use the panel on the left to answer this question.<br />Your response will be included in the submission.</p>
                             </div>
                         </div>
                     )}
@@ -576,6 +626,36 @@ const TestRoom: React.FC = () => {
                     {submitError}
                 </div>
             )}
+
+            <AnimatePresence>
+                {(showFsWarning || tabWarningLevel > 0) && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -12 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -12 }}
+                        style={{ position: 'fixed', top: '4.5rem', left: '50%', transform: 'translateX(-50%)', zIndex: 1300, width: 'min(520px, calc(100vw - 2rem))', background: 'var(--bg)', border: `1px solid ${tabWarningLevel === 2 ? 'var(--danger)' : 'var(--warning)'}`, borderRadius: '12px', boxShadow: 'var(--shadow-lg)', padding: '1rem 1.125rem' }}
+                    >
+                        {showFsWarning && (
+                            <>
+                                <p className="label" style={{ color: 'var(--warning)', marginBottom: '0.35rem' }}>Fullscreen Warning</p>
+                                <p className="t-body">You exited fullscreen mode. Re-enter immediately. A second fullscreen exit will auto-submit the attempt.</p>
+                            </>
+                        )}
+                        {!showFsWarning && tabWarningLevel === 1 && (
+                            <>
+                                <p className="label" style={{ color: 'var(--warning)', marginBottom: '0.35rem' }}>Tab Switch Warning</p>
+                                <p className="t-body">Tab switching is not allowed during the exam. This is your first warning.</p>
+                            </>
+                        )}
+                        {!showFsWarning && tabWarningLevel === 2 && (
+                            <>
+                                <p className="label" style={{ color: 'var(--danger)', marginBottom: '0.35rem' }}>Strict Warning</p>
+                                <p className="t-body">One more tab switch will auto-submit this exam as an unauthorized attempt.</p>
+                            </>
+                        )}
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             <AnimatePresence>
                 {finishing && (

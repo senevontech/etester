@@ -62,14 +62,21 @@ CREATE TABLE public.tests (
 CREATE TABLE public.questions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   test_id UUID REFERENCES public.tests(id) ON DELETE CASCADE,
-  type TEXT NOT NULL, -- 'mcq' or 'code'
+  type TEXT NOT NULL, -- 'mcq', 'code', 'text', or 'numeric'
+  category TEXT NOT NULL DEFAULT 'mcq',
   title TEXT NOT NULL,
   description TEXT,
+  image_url TEXT,
   points INTEGER DEFAULT 10,
   position INTEGER DEFAULT 0,
   -- MCQ fields
   options JSONB,
   answer INTEGER,
+  -- Short answer / numerical fields
+  accepted_answers JSONB,
+  case_sensitive BOOLEAN DEFAULT false,
+  numeric_answer DOUBLE PRECISION,
+  numeric_tolerance DOUBLE PRECISION DEFAULT 0,
   -- Code fields
   template TEXT,
   language TEXT,

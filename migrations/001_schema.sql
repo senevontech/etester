@@ -123,14 +123,21 @@ create policy "Org admins can manage tests"
 create table if not exists public.questions (
     id          uuid primary key default gen_random_uuid(),
     test_id     uuid not null references public.tests(id) on delete cascade,
-    type        text not null check (type in ('mcq', 'code')),
+    type        text not null check (type in ('mcq', 'code', 'text', 'numeric')),
+    category    text not null default 'mcq',
     title       text not null,
     description text default '',
+    image_url   text,
     points      int not null default 10,
     position    int not null default 0,
     -- MCQ
     options     text[] default '{}',
     answer      int,
+    -- Short answer / numerical
+    accepted_answers text[] default '{}',
+    case_sensitive boolean not null default false,
+    numeric_answer double precision,
+    numeric_tolerance double precision not null default 0,
     -- Code
     template    text,
     language    text,
