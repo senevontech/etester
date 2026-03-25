@@ -1,4 +1,20 @@
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? 'http://localhost:3001/api';
+const normalizeApiBaseUrl = (value?: string) => {
+    const fallback = 'http://localhost:3001/api';
+    const raw = (value || fallback).trim();
+
+    try {
+        const url = new URL(raw);
+        if (!url.pathname || url.pathname === '/') {
+            url.pathname = '/api';
+        }
+        return url.toString().replace(/\/$/, '');
+    } catch {
+        const trimmed = raw.replace(/\/$/, '');
+        return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+    }
+};
+
+const API_BASE_URL = normalizeApiBaseUrl(import.meta.env.VITE_API_BASE_URL as string | undefined);
 
 const TOKEN_KEY = 'etester-api-token';
 

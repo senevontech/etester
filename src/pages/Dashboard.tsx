@@ -104,6 +104,7 @@ const Dashboard: React.FC = () => {
                 <div className="anim-fade-up" style={{ marginBottom: '1rem' }}>
                     <p className="t-micro" style={{ color: 'var(--text-muted)' }}>
                         {visible.length} assessment{visible.length !== 1 ? 's' : ''} available
+
                     </p>
                 </div>
 
@@ -137,3 +138,4 @@ const Dashboard: React.FC = () => {
 };
 
 export default Dashboard;
+
