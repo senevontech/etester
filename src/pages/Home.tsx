@@ -100,6 +100,8 @@ const Home: React.FC = () => {
                                 ))}
                             </div>
                         </aside>
+
+                        
                     </div>
                 </div>
             </section>
