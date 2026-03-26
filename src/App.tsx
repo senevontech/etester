@@ -9,10 +9,13 @@ import ProtectedRoute from './components/Auth/ProtectedRoute';
 import Dashboard from './pages/Dashboard';
 import Progress from './pages/Progress';
 import TestRoom from './pages/TestRoom';
+import PreTestGate from './pages/PreTestGate';
 import AdminDashboard from './pages/admin/AdminDashboard';
 import TestEditor from './pages/admin/TestEditor';
 import AdminTestResults from './pages/admin/AdminTestResults';
 import AdminStudents from './pages/admin/AdminStudents';
+import AdminGroups from './pages/admin/AdminGroups';
+import AdminMonitor from './pages/admin/AdminMonitor';
 import Login from './pages/auth/Login';
 import Signup from './pages/auth/Signup';
 import OrgSetup from './pages/auth/OrgSetup';
@@ -48,6 +51,14 @@ function App() {
                                         element={
                                             <ProtectedRoute requiredRole="student">
                                                 <Dashboard />
+                                            </ProtectedRoute>
+                                        }
+                                    />
+                                    <Route
+                                        path="/test/:testId/pre-gate"
+                                        element={
+                                            <ProtectedRoute requiredRole="student">
+                                                <PreTestGate />
                                             </ProtectedRoute>
                                         }
                                     />
@@ -98,6 +109,30 @@ function App() {
                                         element={
                                             <ProtectedRoute requiredRole="admin">
                                                 <AdminStudents />
+                                            </ProtectedRoute>
+                                        }
+                                    />
+                                    <Route
+                                        path="/admin/groups"
+                                        element={
+                                            <ProtectedRoute requiredRole="admin">
+                                                <AdminGroups />
+                                            </ProtectedRoute>
+                                        }
+                                    />
+                                    <Route
+                                        path="/admin/monitor"
+                                        element={
+                                            <ProtectedRoute requiredRole="admin">
+                                                <AdminMonitor />
+                                            </ProtectedRoute>
+                                        }
+                                    />
+                                    <Route
+                                        path="/admin/groups"
+                                        element={
+                                            <ProtectedRoute requiredRole="admin">
+                                                <AdminGroups />
                                             </ProtectedRoute>
                                         }
                                     />

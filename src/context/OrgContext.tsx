@@ -5,16 +5,37 @@ import { useAuth } from './AuthContext';
 export type Organization = ApiOrganization;
 export type OrgMember = ApiOrgMember;
 
+export interface Group {
+    id: string;
+    orgId: string;
+    name: string;
+    description: string;
+    createdAt: string;
+}
+
+export interface GroupMember {
+    userId: string;
+    name: string;
+    email: string;
+}
+
 interface OrgContextValue {
     activeOrg: Organization | null;
     orgMembers: OrgMember[];
     userOrgs: Organization[];
+    groups: Group[];
     loading: boolean;
     createOrg: (name: string) => Promise<{ data: Organization | null; error: string | null }>;
     joinOrgByInviteCode: (code: string) => Promise<{ error: string | null }>;
     switchOrg: (orgId: string) => Promise<void>;
     refreshMembers: () => Promise<void>;
     generateNewInviteCode: () => Promise<void>;
+    refreshGroups: () => Promise<void>;
+    createGroup: (name: string, description: string) => Promise<Group | null>;
+    deleteGroup: (groupId: string) => Promise<void>;
+    addGroupMember: (groupId: string, userId: string) => Promise<void>;
+    removeGroupMember: (groupId: string, userId: string) => Promise<void>;
+    getGroupMembers: (groupId: string) => Promise<GroupMember[]>;
 }
 
 const OrgContext = createContext<OrgContextValue | null>(null);
@@ -37,17 +58,38 @@ interface OrgResponse {
     org: Organization;
 }
 
+interface GroupsResponse {
+    groups: any[];
+}
+
+interface GroupResponse {
+    group: any;
+}
+
+interface GroupMembersResponse {
+    members: GroupMember[];
+}
+
 export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { user, setUserRole, session } = useAuth();
     const [activeOrg, setActiveOrg] = useState<Organization | null>(null);
     const [userOrgs, setUserOrgs] = useState<Organization[]>([]);
     const [orgMembers, setOrgMembers] = useState<OrgMember[]>([]);
+    const [groups, setGroups] = useState<Group[]>([]);
     const [loading, setLoading] = useState(true);
     const fetchVersionRef = useRef(0);
 
     const userId = user?.id;
     const activeOrgId = activeOrg?.id;
     const sessionToken = session?.token;
+
+    const rowToGroup = (row: any): Group => ({
+        id: row.id,
+        orgId: row.org_id,
+        name: row.name,
+        description: row.description || '',
+        createdAt: row.created_at,
+    });
 
     const fetchUserOrgs = useCallback(async () => {
         const fetchVersion = ++fetchVersionRef.current;
@@ -56,6 +98,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setUserOrgs([]);
             setActiveOrg(null);
             setOrgMembers([]);
+            setGroups([]);
             setLoading(false);
             return;
         }
@@ -73,6 +116,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (orgs.length === 0) {
                 setActiveOrg(null);
                 setOrgMembers([]);
+                setGroups([]);
                 setLoading(false);
                 return;
             }
@@ -89,6 +133,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setUserOrgs([]);
             setActiveOrg(null);
             setOrgMembers([]);
+            setGroups([]);
         } finally {
             if (fetchVersion === fetchVersionRef.current) setLoading(false);
         }
@@ -115,6 +160,66 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useEffect(() => {
         void refreshMembers();
     }, [refreshMembers]);
+
+    const refreshGroups = useCallback(async () => {
+        if (!activeOrgId || user?.role !== 'admin') {
+            setGroups([]);
+            return;
+        }
+
+        try {
+            const data = await apiRequest<GroupsResponse>(`/orgs/${activeOrgId}/groups`);
+            setGroups((data.groups ?? []).map(rowToGroup));
+        } catch {
+            setGroups([]);
+        }
+    }, [activeOrgId, user?.role]);
+
+    useEffect(() => {
+        void refreshGroups();
+    }, [refreshGroups]);
+
+    const createGroup = useCallback(async (name: string, description: string): Promise<Group | null> => {
+        if (!activeOrgId) return null;
+        try {
+            const result = await apiRequest<GroupResponse>(`/orgs/${activeOrgId}/groups`, {
+                method: 'POST',
+                body: { name, description },
+            });
+            const group = rowToGroup(result.group);
+            setGroups(prev => [...prev, group]);
+            return group;
+        } catch {
+            return null;
+        }
+    }, [activeOrgId]);
+
+    const deleteGroup = useCallback(async (groupId: string) => {
+        try {
+            await apiRequest(`/groups/${groupId}`, { method: 'DELETE' });
+            setGroups(prev => prev.filter(g => g.id !== groupId));
+        } catch {
+            // ignore
+        }
+    }, []);
+
+    const addGroupMember = useCallback(async (groupId: string, userId: string) => {
+        await apiRequest(`/groups/${groupId}/members`, {
+            method: 'POST',
+            body: { userId },
+        });
+    }, []);
+
+    const removeGroupMember = useCallback(async (groupId: string, userId: string) => {
+        await apiRequest(`/groups/${groupId}/members/${userId}`, {
+            method: 'DELETE',
+        });
+    }, []);
+
+    const getGroupMembers = useCallback(async (groupId: string): Promise<GroupMember[]> => {
+        const data = await apiRequest<GroupMembersResponse>(`/groups/${groupId}/members`);
+        return data.members ?? [];
+    }, []);
 
     const createOrg = useCallback(async (name: string): Promise<{ data: Organization | null; error: string | null }> => {
         if (!userId) return { data: null, error: 'Not authenticated.' };
@@ -187,12 +292,19 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             activeOrg,
             orgMembers,
             userOrgs,
+            groups,
             loading,
             createOrg,
             joinOrgByInviteCode,
             switchOrg,
             refreshMembers,
             generateNewInviteCode,
+            refreshGroups,
+            createGroup,
+            deleteGroup,
+            addGroupMember,
+            removeGroupMember,
+            getGroupMembers,
         }}
         >
             {children}

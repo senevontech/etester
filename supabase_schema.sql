@@ -128,4 +128,40 @@ BEGIN
   FROM organizations o
   WHERE lower(o.invite_code) = lower(code);
 END;
-$$;
+-- 8. Test Attempts Table (Active Sessions)
+CREATE TABLE public.test_attempts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  test_id UUID REFERENCES public.tests(id) ON DELETE CASCADE,
+  org_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  student_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'in_progress', -- 'in_progress', 'submitted', 'expired'
+  started_at TIMESTAMPTZ DEFAULT NOW(),
+  last_heartbeat_at TIMESTAMPTZ DEFAULT NOW(),
+  expires_at TIMESTAMPTZ,
+  ip_address TEXT,
+  user_agent TEXT,
+  answers JSONB DEFAULT '[]',
+  violations_count INTEGER DEFAULT 0,
+  integrity_score INTEGER DEFAULT 100,
+  violations JSONB DEFAULT '[]'
+);
+
+-- 9. Audit Logs Table
+CREATE TABLE public.audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  actor_user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id UUID,
+  metadata JSONB DEFAULT '{}',
+  ip_address TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.test_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all for authenticated" ON public.test_attempts FOR ALL USING (auth.role() = 'authenticated');
+CREATE POLICY "Allow all for authenticated" ON public.audit_logs FOR ALL USING (auth.role() = 'authenticated');
+

@@ -4,6 +4,7 @@ import { Plus, Edit2, Trash2, Globe, EyeOff, BarChart2, BookOpen, Clock, Chevron
 import Navbar from '../../components/Layout/Navbar';
 import { useTests } from '../../context/TestContext';
 import { useOrg } from '../../context/OrgContext';
+import { useAuth } from '../../context/AuthContext';
 import { Difficulty } from '../../context/TestContext';
 import type { Test } from '../../context/TestContext';
 import { apiRequest } from '../../lib/api';
@@ -66,12 +67,14 @@ interface CreateModalProps { onClose: () => void; onCreate: (id: string) => void
 
 const CreateModal: React.FC<CreateModalProps> = ({ onClose, onCreate }) => {
     const { createTest } = useTests();
+    const { activeOrg } = useOrg();
+    const { user } = useAuth();
     const [form, setForm] = useState({ title: '', description: '', duration: 60, difficulty: 'Medium' as Difficulty, tags: '' });
     const [loading, setLoading] = useState(false);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!form.title.trim()) return;
+        if (!form.title.trim() || !activeOrg?.id || !user?.id) return;
         setLoading(true);
         const test = await createTest({
             title: form.title.trim(),
@@ -79,6 +82,9 @@ const CreateModal: React.FC<CreateModalProps> = ({ onClose, onCreate }) => {
             duration: form.duration,
             difficulty: form.difficulty,
             tags: form.tags.split(',').map(t => t.trim()).filter(Boolean),
+            orgId: activeOrg.id,
+            createdBy: user.id,
+            startAt: null
         });
         setLoading(false);
         if (test) onCreate(test.id);
@@ -150,7 +156,7 @@ const TestRow: React.FC<TestRowProps> = ({ test, onEdit, onDelete, onTogglePubli
                 <span className="desktop-only">{test.published ? 'Unpublish' : 'Publish'}</span>
             </button>
             <button className="btn btn-sm btn-ghost" onClick={onDelete} style={{ color: 'var(--danger)' }} title="Delete"><Trash2 size={13} /></button>
-            <button className="btn btn-sm btn-outline" onClick={onEdit} style={{ gap: '0.3rem' }}><Edit2 size={12} /> Edit</button>
+            <button className="btn btn-sm btn-outline" onClick={onEdit} style={{ gap: '0.375rem' }}><Edit2 size={12} /> Edit</button>
         </div>
         <ChevronRight size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
     </div>
@@ -221,7 +227,7 @@ const AdminDashboard: React.FC = () => {
     };
 
     const published = tests.filter(t => t.published).length;
-    const totalQ = tests.reduce((acc, t) => acc + t.questions.length, 0);
+    const totalQ = tests.reduce((acc, t) => acc + (t.questions?.length ?? 0), 0);
 
     return (
         <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
@@ -239,9 +245,15 @@ const AdminDashboard: React.FC = () => {
                         </div>
                         <h1 className="t-h1">Assessments</h1>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <button className="btn btn-md btn-outline" style={{ gap: '0.5rem' }} onClick={() => navigate('/admin/monitor')}>
+                            <Activity size={15} /> Live Monitor
+                        </button>
                         <button className="btn btn-md btn-outline" style={{ gap: '0.5rem' }} onClick={() => navigate('/admin/students')}>
                             <Table2 size={15} /> Students
+                        </button>
+                        <button className="btn btn-md btn-outline" style={{ gap: '0.5rem' }} onClick={() => navigate('/admin/groups')}>
+                            <Users size={15} /> Groups
                         </button>
                         <button className="btn btn-md btn-primary hover-glow" style={{ gap: '0.5rem' }} onClick={() => setShowCreate(true)}>
                             <Plus size={16} /> New Assessment
@@ -270,17 +282,23 @@ const AdminDashboard: React.FC = () => {
                 {/* Stats */}
                 <div className="anim-fade-up" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.625rem', marginBottom: '1.5rem' }}>
                     {[
+                        { icon: Activity, label: 'Live Sessions', value: 'Live', onClick: () => navigate('/admin/monitor'), color: 'var(--accent)' },
                         { icon: BookOpen, label: 'Total Tests', value: String(tests.length) },
                         { icon: Globe, label: 'Published', value: String(published) },
                         { icon: BarChart2, label: 'Total Questions', value: String(totalQ) },
-                    ].map(({ icon: Icon, label, value }) => (
-                        <div key={label} className="card hover-antigravity" style={{ padding: '0.875rem 1rem', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                    ].map(({ icon: Icon, label, value, onClick, color }) => (
+                        <div 
+                            key={label} 
+                            className="card hover-antigravity" 
+                            style={{ padding: '0.875rem 1rem', display: 'flex', gap: '0.75rem', alignItems: 'center', cursor: onClick ? 'pointer' : 'default' }}
+                            onClick={onClick}
+                        >
                             <div style={{ width: '32px', height: '32px', background: 'var(--surface-raised)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                <Icon size={15} style={{ color: 'var(--text-2)' }} />
+                                <Icon size={15} style={{ color: color || 'var(--text-2)' }} />
                             </div>
                             <div>
                                 <p className="t-micro" style={{ color: 'var(--text-muted)', marginBottom: '2px' }}>{label}</p>
-                                <p style={{ fontWeight: 900, fontSize: '1.3rem', letterSpacing: '-0.03em', color: 'var(--text)', lineHeight: 1 }}>{value}</p>
+                                <p style={{ fontWeight: 900, fontSize: '1.3rem', letterSpacing: '-0.03em', color: color || 'var(--text)', lineHeight: 1 }}>{value}</p>
                             </div>
                         </div>
                     ))}

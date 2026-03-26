@@ -65,7 +65,32 @@ export interface Test {
     tags: string[];
     questions: Question[];
     published: boolean;
+    startAt?: string;
+    orgId: string;
+    createdBy: string;
     createdAt: string;
+}
+
+// ─── Attempt & Proctoring Models ──────────────────────────────────────────────
+
+export interface TestAttempt {
+    id: string;
+    testId: string;
+    studentId: string;
+    startedAt: string;
+    completedAt?: string;
+    status: 'in_progress' | 'completed' | 'abandoned';
+    violationScore: number;
+    ipAddress?: string;
+    userAgent?: string;
+}
+
+export interface AttemptLog {
+    id: string;
+    attemptId: string;
+    eventType: 'tab_switch' | 'camera_off' | 'face_not_detected' | 'multiple_faces' | 'suspicious_activity' | 'started' | 'submitted';
+    details: any;
+    timestamp: string;
 }
 
 // ─── Submission Models ───────────────────────────────────────────────────────
@@ -92,6 +117,7 @@ export interface Submission {
     testId: string;
     studentId: string;
     studentName: string;
+    attemptId?: string;
     answers: AnswerPayload[];
     score: number;
     totalPoints: number;

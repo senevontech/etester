@@ -9,6 +9,7 @@ import { useAuth } from '../context/AuthContext';
 import { useResults } from '../context/ResultContext';
 import { useProctoring } from '../hooks/useProctoring';
 import ProctorOverlay from '../components/Proctoring/ProctorOverlay';
+import WebcamProctor from '../components/Proctoring/WebcamProctor';
 import { CodeQuestion, AnswerPayload, IntegrityEvent, QUESTION_CATEGORY_LABELS } from '../types';
 import { executeCode } from '../utils/piston';
 import { apiRequest, ApiError } from '../lib/api';
@@ -44,7 +45,7 @@ const TestRoom: React.FC = () => {
     const { submitTest } = useResults();
 
     const test = getTest(testId ?? '');
-    const { violations, isFullscreen, tabSwitchCount, fullscreenExitCount, enterFullscreen } = useProctoring(true);
+    const { violations, isFullscreen, tabSwitchCount, fullscreenExitCount } = useProctoring(true);
 
     const [idx, setIdx] = useState(0);
     const [timeLeft, setTimeLeft] = useState<number | null>(null);
@@ -87,7 +88,7 @@ const TestRoom: React.FC = () => {
 
         const startAttempt = async () => {
             try {
-                const data = await apiRequest<AttemptResponse>(`/tests/${test.id}/attempts`, {
+                const data = await apiRequest<AttemptResponse & { attempt: { answers: any[] } }>(`/tests/${test.id}/attempts`, {
                     method: 'POST',
                 });
 
@@ -98,6 +99,16 @@ const TestRoom: React.FC = () => {
                 setAttemptExpired(attempt.status !== 'active');
                 setSyncedViolationsCount(attempt.integrity_events?.length ?? attempt.violations_count ?? 0);
                 setTimeLeft(Math.max(0, Math.ceil((new Date(attempt.expires_at).getTime() - Date.now()) / 1000)));
+
+                // Restore answers if they exist
+                if (attempt.answers && attempt.answers.length > 0) {
+                    const restored: Record<string, AnswerPayload> = {};
+                    attempt.answers.forEach((ans: any) => {
+                        restored[ans.questionId] = ans;
+                    });
+                    setAnswers(prev => ({ ...prev, ...restored }));
+                    setLastSavedAnswers(JSON.stringify(restored));
+                }
             } catch (error) {
                 if (cancelled) return;
                 setAttemptId('');
@@ -114,6 +125,46 @@ const TestRoom: React.FC = () => {
             cancelled = true;
         };
     }, [test?.id, user?.id]);
+
+    // Sync violations to backend when they occur
+    useEffect(() => {
+        if (!attemptId || violations.length === 0) return;
+
+        const unsynced = violations.slice(syncedViolationsCount);
+        if (unsynced.length === 0) return;
+
+        const syncViolations = async () => {
+            for (const v of unsynced) {
+                try {
+                    await apiRequest(`/attempts/${attemptId}/violations`, {
+                        method: 'POST',
+                        body: { type: v.type, message: v.message }
+                    });
+                    setSyncedViolationsCount(prev => prev + 1);
+                } catch (err) {
+                    console.error('Failed to sync violation:', err);
+                }
+            }
+        };
+
+        void syncViolations();
+    }, [violations, attemptId, syncedViolationsCount]);
+
+    // Heartbeat to keep session alive and sync IP/UA
+    useEffect(() => {
+        if (!attemptId || attemptExpired) return;
+
+        const interval = setInterval(() => {
+            void apiRequest(`/attempts/${attemptId}/heartbeat`, { method: 'POST' })
+                .catch(err => {
+                    if (err instanceof ApiError && err.status === 410) {
+                        setAttemptExpired(true);
+                    }
+                });
+        }, 30000);
+
+        return () => clearInterval(interval);
+    }, [attemptId, attemptExpired]);
 
     useEffect(() => {
         if (!attemptId || attemptExpired || finishing) return;
@@ -133,22 +184,35 @@ const TestRoom: React.FC = () => {
         return () => clearInterval(timer);
     }, [attemptExpired, attemptId, finishing]);
 
+    const [lastSavedAnswers, setLastSavedAnswers] = useState<string>('');
+
+    const saveAnswers = async () => {
+        if (!attemptId || attemptExpired || finishing) return;
+        const currentAnswersStr = JSON.stringify(answers);
+        if (currentAnswersStr === lastSavedAnswers) return;
+
+        try {
+            await apiRequest(`/attempts/${attemptId}/answers`, {
+                method: 'PATCH',
+                body: { answers: Object.values(answers) },
+            });
+            setLastSavedAnswers(currentAnswersStr);
+        } catch (error) {
+            console.error('Auto-save failed:', error);
+        }
+    };
+
     useEffect(() => {
         if (!attemptId || finishing || attemptExpired) return;
-
-        let cancelled = false;
-
+        
         const heartbeat = async () => {
             try {
                 const data = await apiRequest<AttemptResponse>(`/attempts/${attemptId}/heartbeat`, {
                     method: 'POST',
                 });
-
-                if (cancelled) return;
                 const remaining = Math.max(0, Math.ceil((new Date(data.attempt.expires_at).getTime() - Date.now()) / 1000));
                 setTimeLeft(remaining);
             } catch (error) {
-                if (cancelled) return;
                 if (error instanceof ApiError && (error.status === 409 || error.status === 410)) {
                     setAttemptExpired(true);
                     setTimeLeft(0);
@@ -157,49 +221,27 @@ const TestRoom: React.FC = () => {
             }
         };
 
-        const timer = setInterval(() => {
-            void heartbeat();
-        }, 30000);
+        const hTimer = setInterval(() => void heartbeat(), 30000);
+        const sTimer = setInterval(() => void saveAnswers(), 30000);
 
         return () => {
-            cancelled = true;
-            clearInterval(timer);
+            clearInterval(hTimer);
+            clearInterval(sTimer);
         };
-    }, [attemptExpired, attemptId, finishing]);
+    }, [attemptId, attemptExpired, finishing, answers, lastSavedAnswers]);
 
-    useEffect(() => {
-        if (!attemptId || attemptExpired || violations.length <= syncedViolationsCount) return;
-
-        let cancelled = false;
-
-        const syncEvents = async () => {
-            const events = violations.slice(syncedViolationsCount);
-            if (events.length === 0) return;
-
-            try {
-                const data = await apiRequest<AttemptResponse>(`/attempts/${attemptId}/integrity-events`, {
-                    method: 'POST',
-                    body: { events },
-                });
-
-                if (cancelled) return;
-                setSyncedViolationsCount(data.attempt.integrity_events?.length ?? data.attempt.violations_count ?? violations.length);
-            } catch (error) {
-                if (cancelled) return;
-                if (error instanceof ApiError && (error.status === 409 || error.status === 410)) {
-                    setAttemptExpired(true);
-                    setTimeLeft(0);
-                    setSubmitError(error.message);
-                }
-            }
-        };
-
-        void syncEvents();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [attemptExpired, attemptId, syncedViolationsCount, violations]);
+    const logViolation = async (type: string, details: any = {}) => {
+        if (!attemptId || attemptExpired || finishing) return;
+        try {
+            await apiRequest(`/attempts/${attemptId}/logs`, {
+                method: 'POST',
+                body: { type, details },
+            });
+            setSyncedViolationsCount(prev => prev + 1);
+        } catch (error) {
+            console.error('Failed to log violation:', error);
+        }
+    };
 
     useEffect(() => {
         if (!test) return;
@@ -309,9 +351,12 @@ const TestRoom: React.FC = () => {
     const submitRef = React.useRef(submit);
     useEffect(() => { submitRef.current = submit; });
 
-    // Fullscreen exit enforcement: warn on 1st, auto-submit on 2nd
+    // Fullscreen exit enforcement
     useEffect(() => {
         if (fullscreenExitCount === 0) return;
+        
+        void logViolation('fullscreen_exit', { count: fullscreenExitCount });
+
         if (fullscreenExitCount === 1) {
             setShowFsWarning(true);
         } else {
@@ -319,14 +364,12 @@ const TestRoom: React.FC = () => {
         }
     }, [fullscreenExitCount]);
 
-    // Dismiss fullscreen warning once they re-enter
-    useEffect(() => {
-        if (isFullscreen) setShowFsWarning(false);
-    }, [isFullscreen]);
-
-    // Tab-switch enforcement: warn on 1st, strict warning on 2nd, auto-submit on 3rd
+    // Tab-switch enforcement
     useEffect(() => {
         if (tabSwitchCount === 0) return;
+        
+        void logViolation('tab_switch', { count: tabSwitchCount });
+
         if (tabSwitchCount === 1) {
             setTabWarningLevel(1);
             const t = setTimeout(() => setTabWarningLevel(0), 5000);
@@ -611,13 +654,14 @@ const TestRoom: React.FC = () => {
                         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '3rem', textAlign: 'center' }}>
                             <div>
                                 <TerminalSquare size={48} style={{ color: 'var(--border-strong)', margin: '0 auto 1rem' }} />
-                                <h2 className="t-h3" style={{ marginBottom: '0.5rem' }}>{getQuestionChipLabel(q)}</h2>
+                                <h2 className="t-h3" style={{ marginBottom: '0.5rem' }}>{q ? getQuestionChipLabel(q) : ''}</h2>
                                 <p className="t-body">Use the panel on the left to answer this question.<br />Your response will be included in the submission.</p>
                             </div>
                         </div>
                     )}
                 </div>
 
+                <WebcamProctor onViolation={(type, details) => void logViolation(type, details)} />
                 <ProctorOverlay violations={violations} />
             </main>
 

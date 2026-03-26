@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import {
@@ -20,9 +20,12 @@ import {
     AlertTriangle,
     Pencil,
     House,
+    Check,
 } from 'lucide-react';
 import { useTests } from '../../context/TestContext';
+import { useOrg } from '../../context/OrgContext';
 import { useTheme } from '../../context/ThemeContext';
+import { apiRequest } from '../../lib/api';
 import {
     Question,
     McqQuestion,
@@ -118,7 +121,7 @@ const readFileAsDataUrl = (file: File) => new Promise<string>((resolve, reject) 
     reader.readAsDataURL(file);
 });
 
-const cloneQuestionForForm = (question: Question): Omit<Question, 'id'> => {
+const cloneQuestionForForm = (question: Question): any => {
     if (question.type === 'mcq') {
         return {
             type: 'mcq',
@@ -179,7 +182,7 @@ interface QuestionModalProps {
     initialType?: Question['type'];
     initialQuestion?: Omit<Question, 'id'>;
     onClose: () => void;
-    onSave: (question: Omit<Question, 'id'>) => Promise<void> | void;
+    onSave: (question: any) => Promise<void> | void;
     lockType?: boolean;
 }
 
@@ -199,9 +202,9 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
     const [mcq, setMcq] = useState<Omit<McqQuestion, 'id'>>(
         initialQuestion?.type === 'mcq'
             ? {
-                ...initialQuestion,
-                options: [...initialQuestion.options],
-            }
+                ...initialQuestion as McqQuestion,
+                options: [...(initialQuestion as McqQuestion).options],
+            } as any
             : {
                 ...MCQ_TEMPLATE,
                 options: [...MCQ_TEMPLATE.options],
@@ -210,9 +213,9 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
     const [textQuestion, setTextQuestion] = useState<Omit<TextQuestion, 'id'>>(
         initialQuestion?.type === 'text'
             ? {
-                ...initialQuestion,
-                acceptedAnswers: [...initialQuestion.acceptedAnswers],
-            }
+                ...initialQuestion as TextQuestion,
+                acceptedAnswers: [...(initialQuestion as TextQuestion).acceptedAnswers],
+            } as any
             : {
                 ...TEXT_TEMPLATE,
                 acceptedAnswers: [...TEXT_TEMPLATE.acceptedAnswers],
@@ -221,8 +224,8 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
     const [numericQuestion, setNumericQuestion] = useState<Omit<NumericQuestion, 'id'>>(
         initialQuestion?.type === 'numeric'
             ? {
-                ...initialQuestion,
-            }
+                ...initialQuestion as any,
+            } as any
             : {
                 ...NUMERIC_TEMPLATE,
             },
@@ -230,11 +233,11 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
     const [code, setCode] = useState<Omit<CodeQuestion, 'id'>>(
         initialQuestion?.type === 'code'
             ? {
-                ...initialQuestion,
-                constraints: [...initialQuestion.constraints],
-                examples: initialQuestion.examples.map((example) => ({ ...example })),
-                testCases: (initialQuestion.testCases ?? []).map((testCase) => ({ ...testCase })),
-            }
+                ...initialQuestion as CodeQuestion,
+                constraints: [...(initialQuestion as CodeQuestion).constraints],
+                examples: (initialQuestion as CodeQuestion).examples.map((example) => ({ ...example })),
+                testCases: ((initialQuestion as CodeQuestion).testCases ?? []).map((testCase: any) => ({ ...testCase })),
+            } as any
             : {
                 ...CODE_TEMPLATE,
                 constraints: [...CODE_TEMPLATE.constraints],
@@ -266,7 +269,7 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
             await onSave({
                 ...mcq,
                 category: selectedPreset === 'aptitude' ? 'aptitude' : 'mcq',
-            });
+            } as any);
         } else if (activeType === 'text') {
             if (!textQuestion.title.trim()) {
                 setSaving(false);
@@ -275,7 +278,7 @@ const QuestionModal: React.FC<QuestionModalProps> = ({
             await onSave({
                 ...textQuestion,
                 acceptedAnswers: textQuestion.acceptedAnswers.map((answer) => answer.trim()).filter(Boolean),
-            });
+            } as any);
         } else if (activeType === 'numeric') {
             if (!numericQuestion.title.trim()) {
                 setSaving(false);
@@ -943,11 +946,60 @@ const TestEditor: React.FC = () => {
     const { testId } = useParams<{ testId: string }>();
     const navigate = useNavigate();
     const { getTest, updateTest, deleteQuestion, publishTest, unpublishTest } = useTests();
+    const { groups, orgMembers, refreshGroups, refreshMembers } = useOrg();
+    
     const [showAdd, setShowAdd] = useState(false);
     const [showImport, setShowImport] = useState(false);
     const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
+    const [testAssignments, setTestAssignments] = useState<{ groupId?: string; studentId?: string }[]>([]);
+    const [savingAssignments, setSavingAssignments] = useState(false);
 
     const test = getTest(testId ?? '');
+
+    useEffect(() => {
+        if (testId) {
+            void refreshGroups();
+            void refreshMembers();
+            void loadAssignments();
+        }
+    }, [testId]);
+
+    const loadAssignments = async () => {
+        try {
+            const data = await apiRequest<{ assignments: { group_id?: string; student_id?: string }[] }>(`/tests/${testId}/assignments`);
+            setTestAssignments(data.assignments.map(a => ({ groupId: a.group_id, studentId: a.student_id })));
+        } catch (err) {
+            console.error('Failed to load assignments', err);
+        }
+    };
+
+    const handleToggleAssignment = async (type: 'group' | 'student', id: string) => {
+        const isAssigned = testAssignments.some(a => type === 'group' ? a.groupId === id : a.studentId === id);
+        let next: { groupId?: string; studentId?: string }[];
+        
+        if (isAssigned) {
+            next = testAssignments.filter(a => type === 'group' ? a.groupId !== id : a.studentId !== id);
+        } else {
+            next = [...testAssignments, type === 'group' ? { groupId: id } : { studentId: id }];
+        }
+        
+        setTestAssignments(next);
+        setSavingAssignments(true);
+        try {
+            await apiRequest(`/tests/${testId}/assignments`, {
+                method: 'POST',
+                body: {
+                    groupIds: next.filter(a => a.groupId).map(a => a.groupId),
+                    studentIds: next.filter(a => a.studentId).map(a => a.studentId)
+                }
+            });
+        } catch (err) {
+            console.error('Failed to save assignments', err);
+        } finally {
+            setSavingAssignments(false);
+        }
+    };
+
     if (!test) return (
         <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <div style={{ textAlign: 'center' }}>
@@ -1066,6 +1118,53 @@ const TestEditor: React.FC = () => {
                                 <input className="input" placeholder="SQL, Python, ..." value={test.tags.join(', ')} onChange={(e) => updateTest(test.id, { tags: e.target.value.split(',').map((t) => t.trim()).filter(Boolean) })} />
                             </div>
                         </div>
+                    </div>
+
+                    <div className="card" style={{ padding: '1rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                            <p className="label" style={{ color: 'var(--text-muted)' }}>Access Control</p>
+                            {savingAssignments && <div style={{ width: '12px', height: '12px', border: '2px solid transparent', borderTop: '2px solid var(--accent)', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} />}
+                        </div>
+                        
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            <div>
+                                <p className="t-micro" style={{ color: 'var(--text-muted)', marginBottom: '0.5rem', fontWeight: 800, textTransform: 'uppercase' }}>Groups</p>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                                    {groups.length === 0 ? (
+                                        <p className="t-small" style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No groups found</p>
+                                    ) : groups.map(g => {
+                                        const assigned = testAssignments.some(a => a.groupId === g.id);
+                                        return (
+                                            <button key={g.id} onClick={() => handleToggleAssignment('group', g.id)} className="hover-surface" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.625rem', borderRadius: '6px', border: `1px solid ${assigned ? 'var(--accent)' : 'var(--border)'}`, background: 'none', cursor: 'pointer', textAlign: 'left', width: '100%' }}>
+                                                <span className="t-small" style={{ fontWeight: 700, color: assigned ? 'var(--accent)' : 'var(--text)' }}>{g.name}</span>
+                                                {assigned && <Check size={12} style={{ color: 'var(--accent)' }} />}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            <div>
+                                <p className="t-micro" style={{ color: 'var(--text-muted)', marginBottom: '0.5rem', fontWeight: 800, textTransform: 'uppercase' }}>Students</p>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', maxHeight: '200px', overflowY: 'auto' }}>
+                                    {orgMembers.filter(m => m.role === 'student').length === 0 ? (
+                                        <p className="t-small" style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No students found</p>
+                                    ) : orgMembers.filter(m => m.role === 'student').map(m => {
+                                        const assigned = testAssignments.some(a => a.studentId === m.user_id);
+                                        return (
+                                            <button key={m.user_id} onClick={() => handleToggleAssignment('student', m.user_id)} className="hover-surface" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.625rem', borderRadius: '6px', border: `1px solid ${assigned ? 'var(--accent)' : 'var(--border)'}`, background: 'none', cursor: 'pointer', textAlign: 'left', width: '100%' }}>
+                                                <span className="t-small" style={{ fontWeight: 700, color: assigned ? 'var(--accent)' : 'var(--text)' }}>{m.profile?.name || 'Unknown'}</span>
+                                                {assigned && <Check size={12} style={{ color: 'var(--accent)' }} />}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <p className="t-micro" style={{ color: 'var(--text-muted)', marginTop: '0.75rem', lineHeight: 1.4 }}>
+                            If no assignments are set, <strong>all students</strong> in the organization can see this test.
+                        </p>
                     </div>
 
                     <div className="card" style={{ padding: '1rem' }}>

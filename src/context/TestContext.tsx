@@ -2,18 +2,21 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { ApiError, apiRequest } from '../lib/api';
 import { useOrg } from './OrgContext';
 import { useAuth } from './AuthContext';
-import type { CodeQuestion, Difficulty, McqQuestion, NumericQuestion, Question, TextQuestion } from '../types';
+import type { CodeQuestion, McqQuestion, NumericQuestion, Question, TextQuestion } from '../types';
+
+export type Difficulty = 'Easy' | 'Medium' | 'Hard';
 
 export interface Test {
     id: string;
-    org_id: string;
+    orgId: string;
     title: string;
     description: string;
     duration: number;
     difficulty: Difficulty;
     tags: string[];
     published: boolean;
-    created_by: string;
+    startAt: string | null;
+    createdBy: string;
     createdAt: string;
     questions: Question[];
 }
@@ -98,14 +101,15 @@ const rowToQuestion = (q: any): Question => {
 
 const rowToTest = (row: any): Test => ({
     id: row.id,
-    org_id: row.org_id,
+    orgId: row.org_id,
     title: row.title,
     description: row.description ?? '',
     duration: row.duration,
     difficulty: row.difficulty as Difficulty,
     tags: row.tags ?? [],
     published: row.published,
-    created_by: row.created_by ?? '',
+    startAt: row.start_at,
+    createdBy: row.created_by ?? '',
     createdAt: row.created_at,
     questions: (row.questions ?? []).slice().sort((a: any, b: any) => a.position - b.position).map(rowToQuestion),
 });
@@ -175,8 +179,8 @@ export const TestProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     }, [activeOrgId, userId]);
 
-    const updateTest = useCallback(async (id: string, data: Partial<Omit<Test, 'id' | 'createdAt' | 'questions' | 'org_id'>>) => {
-        const { created_by: _createdBy, ...rest } = data as Partial<Test>;
+    const updateTest = useCallback(async (id: string, data: Partial<Omit<Test, 'id' | 'createdAt' | 'questions' | 'orgId'>>) => {
+        const { createdBy: _createdBy, ...rest } = data as Partial<Test>;
         const payload = {
             title: rest.title,
             description: rest.description,

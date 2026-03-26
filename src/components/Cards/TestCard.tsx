@@ -73,7 +73,7 @@ const TestCard: React.FC<TestCardProps> = ({ id, title, duration, date, difficul
                 </div>
                 <button
                     className="btn btn-sm btn-primary hover-glow"
-                    onClick={(e) => { e.stopPropagation(); navigate(`/test/${id}`); }}
+                    onClick={(e) => { e.stopPropagation(); navigate(`/test/${id}/pre-gate`); }}
                 >
                     Start
                 </button>

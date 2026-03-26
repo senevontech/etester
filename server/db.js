@@ -54,6 +54,8 @@ export const initDb = async () => {
             name TEXT NOT NULL,
             slug TEXT NOT NULL UNIQUE,
             invite_code TEXT NOT NULL UNIQUE,
+            invite_code_expiry TIMESTAMPTZ,
+            invite_code_max_usage INTEGER,
             created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
@@ -85,6 +87,25 @@ export const initDb = async () => {
     `);
 
     await query(`
+        CREATE TABLE IF NOT EXISTS groups (
+            id TEXT PRIMARY KEY,
+            org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS group_members (
+            id TEXT PRIMARY KEY,
+            group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (group_id, user_id)
+        );
+    `);
+
+    await query(`
         CREATE TABLE IF NOT EXISTS tests (
             id TEXT PRIMARY KEY,
             org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -94,8 +115,20 @@ export const initDb = async () => {
             difficulty TEXT NOT NULL CHECK (difficulty IN ('Easy', 'Medium', 'Hard')),
             tags JSONB NOT NULL DEFAULT '[]'::jsonb,
             published BOOLEAN NOT NULL DEFAULT FALSE,
+            start_at TIMESTAMPTZ,
             created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS test_assignments (
+            id TEXT PRIMARY KEY,
+            test_id TEXT NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+            student_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+            group_id TEXT REFERENCES groups(id) ON DELETE CASCADE,
+            assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CHECK ((student_id IS NOT NULL AND group_id IS NULL) OR (student_id IS NULL AND group_id IS NOT NULL))
         );
     `);
 
@@ -131,13 +164,26 @@ export const initDb = async () => {
             test_id TEXT NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
             org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
             student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            status TEXT NOT NULL CHECK (status IN ('active', 'submitted', 'expired', 'abandoned')),
+            status TEXT NOT NULL CHECK (status IN ('active', 'submitted', 'expired', 'abandoned', 'in_progress', 'completed')),
             started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             expires_at TIMESTAMPTZ NOT NULL,
             submitted_at TIMESTAMPTZ,
             violations_count INTEGER NOT NULL DEFAULT 0,
-            integrity_events JSONB NOT NULL DEFAULT '[]'::jsonb
+            violation_score INTEGER DEFAULT 0,
+            integrity_events JSONB NOT NULL DEFAULT '[]'::jsonb,
+            ip_address TEXT,
+            user_agent TEXT
+        );
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS attempt_logs (
+            id TEXT PRIMARY KEY,
+            attempt_id TEXT NOT NULL REFERENCES test_attempts(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            details JSONB NOT NULL DEFAULT '{}'::jsonb,
+            timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
     `);
 
@@ -229,6 +275,12 @@ export const initDb = async () => {
     await query('CREATE INDEX IF NOT EXISTS idx_submissions_org_id ON submissions(org_id);');
     await query('CREATE INDEX IF NOT EXISTS idx_submissions_student_id ON submissions(student_id);');
     await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_submissions_attempt_id_unique ON submissions (attempt_id) WHERE attempt_id IS NOT NULL;`);
+
+    await query('CREATE INDEX IF NOT EXISTS idx_groups_org_id ON groups(org_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON group_members(group_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON group_members(user_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_test_assignments_test_id ON test_assignments(test_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_attempt_logs_attempt_id ON attempt_logs(attempt_id);');
 };
 
 export const closeDb = async () => {

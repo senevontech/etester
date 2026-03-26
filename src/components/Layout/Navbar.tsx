@@ -6,7 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useOrg } from '../../context/OrgContext';
 
 interface NavbarProps {
-    activeTab?: 'dashboard' | 'progress' | 'faq';
+    activeTab?: 'dashboard' | 'progress' | 'faq' | 'admin';
     overlay?: boolean;
 }
 

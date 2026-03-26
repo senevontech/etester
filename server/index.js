@@ -316,6 +316,7 @@ const mapAuditLogRow = (row) => ({
 
 const mapAttemptRow = (row) => ({
     ...row,
+    answers: row.answers ?? [],
     integrity_events: row.integrity_events ?? [],
     started_at: row.started_at instanceof Date ? row.started_at.toISOString() : row.started_at,
     last_heartbeat_at: row.last_heartbeat_at instanceof Date ? row.last_heartbeat_at.toISOString() : row.last_heartbeat_at,
@@ -889,6 +890,20 @@ const handleRequest = async (req, res) => {
             if (orgResult.rowCount === 0) throw new HttpError(404, 'Invalid invite code. Please check and try again.');
 
             const orgRow = orgResult.rows[0];
+
+            // Check expiry
+            if (orgRow.invite_code_expiry && new Date(orgRow.invite_code_expiry) < new Date()) {
+                throw new HttpError(403, 'This invite code has expired.');
+            }
+
+            // Check usage limit
+            if (orgRow.invite_code_max_usage) {
+                const { rowCount: currentUsage } = await client.query('SELECT 1 FROM org_members WHERE org_id = $1', [orgRow.id]);
+                if (currentUsage >= orgRow.invite_code_max_usage) {
+                    throw new HttpError(403, 'This invite code has reached its maximum usage limit.');
+                }
+            }
+
             const membershipResult = await client.query(`
                 SELECT 1 FROM org_members WHERE org_id = $1 AND user_id = $2 LIMIT 1
             `, [orgRow.id, user.id]);
@@ -1036,19 +1051,137 @@ const handleRequest = async (req, res) => {
         return;
     }
 
+    match = pathname.match(/^\/api\/orgs\/([^/]+)\/groups$/);
+    if (req.method === 'POST' && match) {
+        const { user } = await requireAuth(req);
+        const orgId = decodeURIComponent(match[1]);
+        await requireAdmin(user.id, orgId);
+        const name = String(body.name || '').trim();
+        if (!name) throw new HttpError(400, 'Group name is required.');
+
+        const group = await transaction(async (client) => {
+            const id = randomUUID();
+            const result = await client.query(`
+                INSERT INTO groups (id, org_id, name, created_at)
+                VALUES ($1, $2, $3, $4)
+                RETURNING *
+            `, [id, orgId, name, now()]);
+            return result.rows[0];
+        });
+
+        sendJson(req, res, 201, { group });
+        return;
+    }
+
+    if (req.method === 'GET' && match) {
+        const { user } = await requireAuth(req);
+        const orgId = decodeURIComponent(match[1]);
+        await requireMembership(user.id, orgId);
+
+        const { rows } = await query('SELECT * FROM groups WHERE org_id = $1 ORDER BY name ASC', [orgId]);
+        sendJson(req, res, 200, { groups: rows });
+        return;
+    }
+
+    match = pathname.match(/^\/api\/groups\/([^/]+)\/members$/);
+    if (req.method === 'POST' && match) {
+        const { user } = await requireAuth(req);
+        const groupId = decodeURIComponent(match[1]);
+        const { rows: gRows } = await query('SELECT org_id FROM groups WHERE id = $1', [groupId]);
+        if (gRows.length === 0) throw new HttpError(404, 'Group not found.');
+        await requireAdmin(user.id, gRows[0].org_id);
+
+        const targetUserId = String(body.userId || '');
+        if (!targetUserId) throw new HttpError(400, 'User ID is required.');
+
+        await query(`
+            INSERT INTO group_members (id, group_id, user_id, joined_at)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (group_id, user_id) DO NOTHING
+        `, [randomUUID(), groupId, targetUserId, now()]);
+
+        sendEmpty(req, res, 204);
+        return;
+    }
+
+    if (req.method === 'GET' && match) {
+        const { user } = await requireAuth(req);
+        const groupId = decodeURIComponent(match[1]);
+        const { rows: gRows } = await query('SELECT org_id FROM groups WHERE id = $1', [groupId]);
+        if (gRows.length === 0) throw new HttpError(404, 'Group not found.');
+        await requireMembership(user.id, gRows[0].org_id);
+
+        const { rows } = await query(`
+            SELECT u.id, u.name, u.email
+            FROM group_members gm
+            JOIN users u ON u.id = gm.user_id
+            WHERE gm.group_id = $1
+        `, [groupId]);
+
+        sendJson(req, res, 200, { members: rows });
+        return;
+    }
+
+    match = pathname.match(/^\/api\/orgs\/([^/]+)\/live-attempts$/);
+    if (req.method === 'GET' && match) {
+        const { user } = await requireAuth(req);
+        const orgId = decodeURIComponent(match[1]);
+        await requireAdmin(user.id, orgId);
+
+        const { rows: attempts } = await query(`
+            SELECT
+                a.id,
+                p.name as student_name,
+                p.email as student_email,
+                t.title as test_title,
+                t.id as test_id,
+                a.status,
+                a.started_at,
+                a.last_heartbeat_at,
+                a.violations_count as violation_score,
+                a.ip_address,
+                a.violations
+            FROM test_attempts a
+            JOIN public.profiles p ON a.student_id = p.id
+            JOIN public.tests t ON a.test_id = t.id
+            WHERE a.org_id = $1 AND (a.status = 'active' OR a.status = 'in_progress')
+            ORDER BY a.started_at DESC
+        `, [orgId]);
+
+        sendJson(req, res, 200, { attempts: attempts.map(mapAttemptRow) });
+        return;
+    }
+
     match = pathname.match(/^\/api\/orgs\/([^/]+)\/tests$/);
     if (req.method === 'GET' && match) {
         const { user } = await requireAuth(req);
         const orgId = decodeURIComponent(match[1]);
         const membership = await requireMembership(user.id, orgId);
 
-        const testRows = await query(`
-            SELECT *
-            FROM tests
-            WHERE org_id = $1
-              AND ($2 = 'admin' OR published = TRUE)
-            ORDER BY created_at DESC
-        `, [orgId, membership.role]);
+        let testRows;
+        if (membership.role === 'admin') {
+            testRows = await query(`
+                SELECT * FROM tests WHERE org_id = $1 ORDER BY created_at DESC
+            `, [orgId]);
+        } else {
+            // Students see tests that are either assigned to them (directly or via group)
+            // or tests that have NO assignments in that org (public to all org members)
+            testRows = await query(`
+                SELECT t.*
+                FROM tests t
+                WHERE t.org_id = $1
+                  AND t.published = TRUE
+                  AND (
+                    NOT EXISTS (SELECT 1 FROM test_assignments WHERE test_id = t.id)
+                    OR EXISTS (
+                      SELECT 1 FROM test_assignments ta
+                      LEFT JOIN group_members gm ON gm.group_id = ta.group_id AND gm.user_id = $2
+                      WHERE ta.test_id = t.id AND (ta.student_id = $2 OR gm.user_id IS NOT NULL)
+                    )
+                  )
+                ORDER BY t.created_at DESC
+            `, [orgId, user.id]);
+        }
 
         const testIds = testRows.rows.map((row) => row.id);
         const questionRows = await fetchQuestionsByTestIds(testIds);
@@ -1056,6 +1189,43 @@ const handleRequest = async (req, res) => {
         sendJson(req, res, 200, {
             tests: testRows.rows.map((row) => mapTestRow(row, questionRows.filter((question) => question.test_id === row.id), membership.role)),
         });
+        return;
+    }
+
+    match = pathname.match(/^\/api\/tests\/([^/]+)\/assignments$/);
+    if (req.method === 'POST' && match) {
+        const { user } = await requireAuth(req);
+        const testId = decodeURIComponent(match[1]);
+        const test = await getTestOrThrow(testId);
+        await requireAdmin(user.id, test.org_id);
+
+        const { studentId, groupId } = body;
+        if (!studentId && !groupId) throw new HttpError(400, 'Either studentId or groupId is required.');
+
+        await query(`
+            INSERT INTO test_assignments (id, test_id, student_id, group_id, assigned_at)
+            VALUES ($1, $2, $3, $4, $5)
+        `, [randomUUID(), testId, studentId || null, groupId || null, now()]);
+
+        sendEmpty(req, res, 204);
+        return;
+    }
+
+    if (req.method === 'GET' && match) {
+        const { user } = await requireAuth(req);
+        const testId = decodeURIComponent(match[1]);
+        const test = await getTestOrThrow(testId);
+        await requireMembership(user.id, test.org_id);
+
+        const { rows } = await query(`
+            SELECT ta.*, u.name as student_name, u.email as student_email, g.name as group_name
+            FROM test_assignments ta
+            LEFT JOIN users u ON u.id = ta.student_id
+            LEFT JOIN groups g ON g.id = ta.group_id
+            WHERE ta.test_id = $1
+        `, [testId]);
+
+        sendJson(req, res, 200, { assignments: rows });
         return;
     }
 
@@ -1068,7 +1238,23 @@ const handleRequest = async (req, res) => {
         const membership = await requireMembership(user.id, test.org_id);
         if (membership.role !== 'student') throw new HttpError(403, 'Only students can start test attempts.');
         if (!test.published) throw new HttpError(403, 'Only published tests can be attempted.');
+
+        // Check assigned access
+        const { rows: assignments } = await query(`
+            SELECT 1 FROM test_assignments ta
+            LEFT JOIN group_members gm ON gm.group_id = ta.group_id AND gm.user_id = $2
+            WHERE ta.test_id = $1 AND (ta.student_id = $2 OR gm.user_id IS NOT NULL)
+            LIMIT 1
+        `, [testId, user.id]);
+
+        // If assignments exist for this test but none for this user, deny access
+        const { rows: anyAssignments } = await query('SELECT 1 FROM test_assignments WHERE test_id = $1 LIMIT 1', [testId]);
+        if (anyAssignments.length > 0 && assignments.length === 0) {
+            throw new HttpError(403, 'This test is not assigned to you.');
+        }
+
         const requestIp = getRequestIp(req);
+        const userAgent = req.headers['user-agent'];
 
         const latestAttemptResult = await query(`
             SELECT *
@@ -1081,75 +1267,149 @@ const handleRequest = async (req, res) => {
         if (latestAttemptResult.rows.length > 0) {
             const latestAttempt = await expireAttemptIfNeeded(latestAttemptResult.rows[0]);
 
-            if (latestAttempt.status === 'active') {
+            if (latestAttempt.status === 'active' || latestAttempt.status === 'in_progress') {
                 sendJson(req, res, 200, { attempt: mapAttemptRow(latestAttempt) });
                 return;
             }
 
-            if (latestAttempt.status === 'submitted') {
+            if (latestAttempt.status === 'submitted' || latestAttempt.status === 'completed') {
                 throw new HttpError(409, 'This test has already been submitted.');
             }
-
-            // Expired or abandoned — allow the student to start a fresh attempt
         }
 
         const startedAt = now();
         const expiresAt = new Date(Date.now() + Math.max(1, Number(test.duration || 60)) * 60 * 1000).toISOString();
+        const attemptId = randomUUID();
         let attempt;
 
         try {
-            attempt = await transaction(async (client) => {
-                const attemptId = randomUUID();
-                const result = await client.query(`
-                    INSERT INTO test_attempts (
-                        id, test_id, org_id, student_id, status,
-                        started_at, last_heartbeat_at, expires_at, violations_count, integrity_events
-                    )
-                    VALUES ($1, $2, $3, $4, 'active', $5, $5, $6, 0, '[]'::jsonb)
-                    RETURNING *
-                `, [
-                    attemptId,
-                    testId,
-                    test.org_id,
-                    user.id,
-                    startedAt,
-                    expiresAt,
-                ]);
+            const { rows } = await query(`
+                INSERT INTO test_attempts (
+                    id, test_id, org_id, student_id, status, started_at, last_heartbeat_at, expires_at, ip_address, user_agent
+                )
+                VALUES ($1, $2, $3, $4, 'in_progress', $5, $5, $6, $7, $8)
+                RETURNING *
+            `, [attemptId, testId, test.org_id, user.id, startedAt, expiresAt, requestIp, userAgent]);
 
-                await insertAuditLog(client, {
-                    orgId: test.org_id,
-                    actorUserId: user.id,
-                    action: 'attempt.started',
-                    entityType: 'attempt',
-                    entityId: attemptId,
-                    metadata: { testId, testTitle: test.title, expiresAt },
-                    ipAddress: requestIp,
-                });
-
-                return result.rows[0];
+            await insertAuditLog(query, {
+                orgId: test.org_id,
+                actorUserId: user.id,
+                action: 'attempt.started',
+                entityType: 'attempt',
+                entityId: attemptId,
+                metadata: { testId, testTitle: test.title, expiresAt },
+                ipAddress: requestIp,
             });
+
+            attempt = rows[0];
         } catch (error) {
-            // React StrictMode can trigger duplicate attempt-start requests in development.
-            // If another request already created the active attempt, return that row instead of 500.
-            if (error && typeof error === 'object' && 'code' in error && error.code === '23505') {
-                const existingAttemptResult = await query(`
-                    SELECT *
-                    FROM test_attempts
-                    WHERE test_id = $1 AND student_id = $2 AND status = 'active'
-                    ORDER BY started_at DESC
-                    LIMIT 1
-                `, [testId, user.id]);
-
-                if (existingAttemptResult.rows.length > 0) {
-                    sendJson(req, res, 200, { attempt: mapAttemptRow(existingAttemptResult.rows[0]) });
-                    return;
-                }
+            // Handle race conditions (e.g. React StrictMode)
+            const { rows } = await query(`
+                SELECT * FROM test_attempts 
+                WHERE test_id = $1 AND student_id = $2 AND (status = 'active' OR status = 'in_progress')
+                LIMIT 1
+            `, [testId, user.id]);
+            if (rows.length > 0) {
+                sendJson(req, res, 200, { attempt: mapAttemptRow(rows[0]) });
+                return;
             }
-
             throw error;
         }
 
         sendJson(req, res, 201, { attempt: mapAttemptRow(attempt) });
+        return;
+    }
+
+    match = pathname.match(/^\/api\/attempts\/([^/]+)\/heartbeat$/);
+    if (req.method === 'POST' && match) {
+        const { user } = await requireAuth(req);
+        const attemptId = decodeURIComponent(match[1]);
+        const attempt = await getAttemptOrThrow(attemptId);
+        if (attempt.student_id !== user.id) throw new HttpError(403, 'Unauthorized.');
+
+        if (attempt.status !== 'in_progress' && attempt.status !== 'active') {
+            throw new HttpError(410, `Assessment session is ${attempt.status}.`);
+        }
+
+        const updated = await query(`
+            UPDATE test_attempts 
+            SET last_heartbeat_at = $1, ip_address = $2, user_agent = $3
+            WHERE id = $4 
+            RETURNING *
+        `, [now(), getRequestIp(req), req.headers['user-agent'], attemptId]);
+
+        sendJson(req, res, 200, { attempt: mapAttemptRow(updated.rows[0]) });
+        return;
+    }
+
+    match = pathname.match(/^\/api\/attempts\/([^/]+)\/violations$/);
+    if (req.method === 'POST' && match) {
+        const { user } = await requireAuth(req);
+        const attemptId = decodeURIComponent(match[1]);
+        const { type, message } = await readJson(req);
+        
+        const attempt = await getAttemptOrThrow(attemptId);
+        if (attempt.student_id !== user.id) throw new HttpError(403, 'Unauthorized.');
+
+        const violation = {
+            type,
+            message,
+            timestamp: now()
+        };
+
+        const updated = await query(`
+            UPDATE test_attempts
+            SET 
+                violations = COALESCE(violations, '[]'::jsonb) || $1::jsonb,
+                violations_count = violations_count + 1,
+                integrity_score = GREATEST(0, integrity_score - $2)
+            WHERE id = $3
+            RETURNING *
+        `, [JSON.stringify([violation]), type === 'TAB_SWITCH' ? 10 : 5, attemptId]);
+
+        sendJson(req, res, 200, { attempt: mapAttemptRow(updated.rows[0]) });
+        return;
+    }
+
+    match = pathname.match(/^\/api\/attempts\/([^/]+)\/answers$/);
+    if (req.method === 'PATCH' && match) {
+        const { user } = await requireAuth(req);
+        const attemptId = decodeURIComponent(match[1]);
+        const attempt = await getAttemptOrThrow(attemptId);
+        if (attempt.student_id !== user.id) throw new HttpError(403, 'Unauthorized.');
+
+        if (attempt.status !== 'in_progress' && attempt.status !== 'active') {
+            throw new HttpError(410, `Assessment session is ${attempt.status}.`);
+        }
+
+        const answers = Array.isArray(body.answers) ? body.answers : [];
+        await query('UPDATE test_attempts SET answers = $1::jsonb WHERE id = $2', [JSON.stringify(answers), attemptId]);
+
+        sendEmpty(req, res, 204);
+        return;
+    }
+
+    match = pathname.match(/^\/api\/attempts\/([^/]+)\/logs$/);
+    if (req.method === 'POST' && match) {
+        const { user } = await requireAuth(req);
+        const attemptId = decodeURIComponent(match[1]);
+        const attempt = await getAttemptOrThrow(attemptId);
+        if (attempt.student_id !== user.id) throw new HttpError(403, 'Unauthorized.');
+
+        const eventType = String(body.type || 'UNKNOWN').slice(0, 64);
+        const details = body.details || {};
+
+        await query(`
+            INSERT INTO attempt_logs (id, attempt_id, event_type, details, timestamp)
+            VALUES ($1, $2, $3, $4::jsonb, $5)
+        `, [randomUUID(), attemptId, eventType, JSON.stringify(details), now()]);
+
+        // If it's a violation, increment violation_score
+        if (['tab_switch', 'camera_off', 'face_not_detected', 'multiple_faces', 'suspicious'].includes(eventType)) {
+            await query('UPDATE test_attempts SET violation_score = violation_score + 1 WHERE id = $1', [attemptId]);
+        }
+
+        sendEmpty(req, res, 204);
         return;
     }
 
@@ -1283,6 +1543,49 @@ const handleRequest = async (req, res) => {
                 await client.query('DELETE FROM tests WHERE id = $1', [testId]);
             });
             sendJson(req, res, 200, { success: true });
+            return;
+        }
+    }
+    
+    match = pathname.match(/^\/api\/tests\/([^/]+)\/assignments$/);
+    if (match) {
+        const { user } = await requireAuth(req);
+        const testId = decodeURIComponent(match[1]);
+        const test = await getTestOrThrow(testId);
+        
+        if (req.method === 'GET') {
+            await requireAdmin(user.id, test.org_id);
+            const { rows } = await query('SELECT * FROM test_assignments WHERE test_id = $1', [testId]);
+            sendJson(req, res, 200, { assignments: rows });
+            return;
+        }
+
+        if (req.method === 'POST') {
+            await requireAdmin(user.id, test.org_id);
+            const { groupIds = [], studentIds = [] } = body;
+            const requestIp = getRequestIp(req);
+
+            await transaction(async (client) => {
+                await client.query('DELETE FROM test_assignments WHERE test_id = $1', [testId]);
+                for (const gid of groupIds) {
+                    await client.query('INSERT INTO test_assignments (test_id, group_id) VALUES ($1, $2)', [testId, gid]);
+                }
+                for (const sid of studentIds) {
+                    await client.query('INSERT INTO test_assignments (test_id, student_id) VALUES ($1, $2)', [testId, sid]);
+                }
+
+                await insertAuditLog(client, {
+                    orgId: test.org_id,
+                    actorUserId: user.id,
+                    action: 'test.assignments_updated',
+                    entityType: 'test',
+                    entityId: testId,
+                    metadata: { title: test.title, groupCount: groupIds.length, studentCount: studentIds.length },
+                    ipAddress: requestIp,
+                });
+            });
+
+            sendJson(req, res, 200, { message: 'Assignments updated' });
             return;
         }
     }

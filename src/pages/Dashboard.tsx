@@ -17,8 +17,11 @@ const Dashboard: React.FC = () => {
     const { getStudentSubmissions } = useResults();
     const [search, setSearch] = useState('');
     const [filter, setFilter] = useState<Filter>('All');
+    const [activeTab, setActiveTab] = useState<'Active' | 'Upcoming' | 'Completed'>('Active');
 
     const mySubmissions = user ? getStudentSubmissions(user.id) : [];
+    const completedTestIds = new Set(mySubmissions.map(s => s.testId));
+
     const avgScore = mySubmissions.length > 0
         ? mySubmissions.reduce((a, b) => a + (b.totalPoints > 0 ? (b.score / b.totalPoints) * 100 : 0), 0) / mySubmissions.length
         : 0;
@@ -32,15 +35,28 @@ const Dashboard: React.FC = () => {
         { icon: BarChart2, label: 'Completed', value: String(mySubmissions.length), sub: 'Assessments' },
     ];
 
-    // Only show published tests on the student dashboard
+    // Categorize tests
+    const now = new Date();
     const published = tests.filter(t => t.published);
+    
+    const activeTests = published.filter(t => !completedTestIds.has(t.id) && (!t.startAt || new Date(t.startAt) <= now));
+    const upcomingTests = published.filter(t => !completedTestIds.has(t.id) && t.startAt && new Date(t.startAt) > now);
+    const completedTests = published.filter(t => completedTestIds.has(t.id));
 
-    const visible = published.filter(t => {
-        const matchSearch = t.title.toLowerCase().includes(search.toLowerCase()) ||
-            t.tags.some(tag => tag.toLowerCase().includes(search.toLowerCase()));
-        const matchFilter = filter === 'All' || t.difficulty === filter;
-        return matchSearch && matchFilter;
-    });
+    const getVisibleTests = () => {
+        let list = activeTests;
+        if (activeTab === 'Upcoming') list = upcomingTests;
+        if (activeTab === 'Completed') list = completedTests;
+
+        return list.filter(t => {
+            const matchSearch = t.title.toLowerCase().includes(search.toLowerCase()) ||
+                t.tags.some(tag => tag.toLowerCase().includes(search.toLowerCase()));
+            const matchFilter = filter === 'All' || t.difficulty === filter;
+            return matchSearch && matchFilter;
+        });
+    };
+
+    const visible = getVisibleTests();
 
     return (
         <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
@@ -86,16 +102,31 @@ const Dashboard: React.FC = () => {
                             style={{ paddingLeft: '2.5rem' }} value={search}
                             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)} />
                     </div>
-                    <div style={{ display: 'flex', gap: '0.375rem', overflowX: 'auto', paddingBottom: '2px' }}>
-                        {(['All', 'Easy', 'Medium', 'Hard'] as Filter[]).map(f => (
-                            <button key={f} onClick={() => setFilter(f)}
-                                className={`btn btn-sm ${filter === f ? 'btn-primary hover-glow' : 'btn-outline'}`}
-                                style={{ flexShrink: 0 }}>{f}</button>
-                        ))}
-                        <div style={{ marginLeft: 'auto', flexShrink: 0 }}>
-                            <button className="btn btn-sm btn-ghost" style={{ gap: '0.375rem' }}>
-                                <SlidersHorizontal size={13} /> More filters
-                            </button>
+                    
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+                        <div style={{ display: 'flex', background: 'var(--surface)', borderRadius: '10px', padding: '0.25rem', border: '1px solid var(--border)' }}>
+                            {(['Active', 'Upcoming', 'Completed'] as const).map(tab => (
+                                <button key={tab} onClick={() => setActiveTab(tab)}
+                                    className="btn btn-sm"
+                                    style={{ 
+                                        borderRadius: '8px',
+                                        background: activeTab === tab ? 'var(--surface-raised)' : 'transparent',
+                                        color: activeTab === tab ? 'var(--accent)' : 'var(--text-muted)',
+                                        border: 'none',
+                                        boxShadow: activeTab === tab ? 'var(--shadow-sm)' : 'none',
+                                        padding: '0.5rem 1rem'
+                                    }}>
+                                    {tab} ({tab === 'Active' ? activeTests.length : tab === 'Upcoming' ? upcomingTests.length : completedTests.length})
+                                </button>
+                            ))}
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '0.375rem', overflowX: 'auto' }}>
+                            {(['All', 'Easy', 'Medium', 'Hard'] as Filter[]).map(f => (
+                                <button key={f} onClick={() => setFilter(f)}
+                                    className={`btn btn-sm ${filter === f ? 'btn-primary hover-glow' : 'btn-outline'}`}
+                                    style={{ flexShrink: 0 }}>{f}</button>
+                            ))}
                         </div>
                     </div>
                 </section>
@@ -103,8 +134,7 @@ const Dashboard: React.FC = () => {
                 {/* ── Section heading ─────────────────────────────────────── */}
                 <div className="anim-fade-up" style={{ marginBottom: '1rem' }}>
                     <p className="t-micro" style={{ color: 'var(--text-muted)' }}>
-                        {visible.length} assessment{visible.length !== 1 ? 's' : ''} available
-
+                        {visible.length} {activeTab.toLowerCase()} assessment{visible.length !== 1 ? 's' : ''} found
                     </p>
                 </div>
 
@@ -115,21 +145,11 @@ const Dashboard: React.FC = () => {
                     </div>
                 ) : (
                     <div style={{ textAlign: 'center', padding: '4rem 1rem', color: 'var(--text-muted)' }}>
-                        {published.length === 0 ? (
-                            <>
-                                <Shield size={48} className="antigravity" style={{ margin: '0 auto 1rem', color: 'var(--accent)', opacity: 0.8 }} />
-                                <p className="t-h3">No assessments published yet</p>
-                                <p className="t-body" style={{ marginTop: '0.5rem' }}>
-                                    An admin needs to publish an assessment before it appears here.
-                                </p>
-                            </>
-                        ) : (
-                            <>
-                                <Search size={48} className="antigravity" style={{ margin: '0 auto 1rem', color: 'var(--accent)', opacity: 0.6 }} />
-                                <p className="t-h3">No assessments found</p>
-                                <p className="t-body" style={{ marginTop: '0.5rem' }}>Try a different search or filter.</p>
-                            </>
-                        )}
+                        <Shield size={48} className="antigravity" style={{ margin: '0 auto 1rem', color: 'var(--accent)', opacity: 0.8 }} />
+                        <p className="t-h3">No {activeTab.toLowerCase()} assessments</p>
+                        <p className="t-body" style={{ marginTop: '0.5rem' }}>
+                            {activeTab === 'Active' ? 'Check Upcoming or Completed tabs for other tests.' : 'No tests found in this category.'}
+                        </p>
                     </div>
                 )}
             </main>
