@@ -82,8 +82,7 @@ const CreateModal: React.FC<CreateModalProps> = ({ onClose, onCreate }) => {
             duration: form.duration,
             difficulty: form.difficulty,
             tags: form.tags.split(',').map(t => t.trim()).filter(Boolean),
-            orgId: activeOrg.id,
-            createdBy: user.id,
+            visibility: 'assigned_only',
             startAt: null
         });
         setLoading(false);

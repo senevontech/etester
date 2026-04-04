@@ -5,7 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 
 const PASSWORD_RULES = [
-    { label: 'At least 6 characters', test: (p: string) => p.length >= 6 },
+    { label: 'At least 8 characters', test: (p: string) => p.length >= 6 },
     { label: 'Contains a number', test: (p: string) => /\d/.test(p) },
 ];
 

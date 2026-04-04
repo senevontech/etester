@@ -9,7 +9,7 @@ import { useAuth } from '../context/AuthContext';
 import { useResults } from '../context/ResultContext';
 import { useProctoring } from '../hooks/useProctoring';
 import ProctorOverlay from '../components/Proctoring/ProctorOverlay';
-import WebcamProctor from '../components/Proctoring/WebcamProctor';
+import WebcamProctor, { type WebcamSnapshot } from '../components/Proctoring/WebcamProctor';
 import { CodeQuestion, AnswerPayload, IntegrityEvent, QUESTION_CATEGORY_LABELS } from '../types';
 import { executeCode } from '../utils/piston';
 import { apiRequest, ApiError } from '../lib/api';
@@ -21,7 +21,7 @@ interface TerminalLog {
 
 interface AttemptRecord {
     id: string;
-    status: 'active' | 'submitted' | 'expired' | 'abandoned';
+    status: 'active' | 'in_progress' | 'submitted' | 'expired' | 'abandoned';
     expires_at: string;
     integrity_events: IntegrityEvent[];
     violations_count: number;
@@ -29,6 +29,13 @@ interface AttemptRecord {
 
 interface AttemptResponse {
     attempt: AttemptRecord;
+}
+
+interface EvidenceResponse {
+    evidence: {
+        id: string;
+        captured_at: string;
+    };
 }
 
 const formatTime = (s: number) =>
@@ -62,6 +69,9 @@ const TestRoom: React.FC = () => {
     const [fullscreenReady, setFullscreenReady] = useState(false);
     const [showFsWarning, setShowFsWarning] = useState(false);
     const [tabWarningLevel, setTabWarningLevel] = useState<0 | 1 | 2>(0);
+    const [cameraStatus, setCameraStatus] = useState<'pending' | 'online' | 'offline'>('pending');
+    const [evidenceCount, setEvidenceCount] = useState(0);
+    const [lastEvidenceAt, setLastEvidenceAt] = useState<string | null>(null);
 
     const q = test?.questions[idx];
     const total = test?.questions.length ?? 0;
@@ -85,6 +95,8 @@ const TestRoom: React.FC = () => {
         let cancelled = false;
         setAttemptLoading(true);
         setSubmitError('');
+        setEvidenceCount(0);
+        setLastEvidenceAt(null);
 
         const startAttempt = async () => {
             try {
@@ -96,7 +108,7 @@ const TestRoom: React.FC = () => {
 
                 const attempt = data.attempt;
                 setAttemptId(attempt.id);
-                setAttemptExpired(attempt.status !== 'active');
+                setAttemptExpired(attempt.status !== 'active' && attempt.status !== 'in_progress');
                 setSyncedViolationsCount(attempt.integrity_events?.length ?? attempt.violations_count ?? 0);
                 setTimeLeft(Math.max(0, Math.ceil((new Date(attempt.expires_at).getTime() - Date.now()) / 1000)));
 
@@ -126,63 +138,27 @@ const TestRoom: React.FC = () => {
         };
     }, [test?.id, user?.id]);
 
-    // Sync violations to backend when they occur
+    // Sync hook-generated integrity events to the backend
     useEffect(() => {
-        if (!attemptId || violations.length === 0) return;
+        if (!attemptId || violations.length === 0 || attemptExpired || finishing) return;
 
         const unsynced = violations.slice(syncedViolationsCount);
         if (unsynced.length === 0) return;
 
         const syncViolations = async () => {
-            for (const v of unsynced) {
-                try {
-                    await apiRequest(`/attempts/${attemptId}/violations`, {
-                        method: 'POST',
-                        body: { type: v.type, message: v.message }
-                    });
-                    setSyncedViolationsCount(prev => prev + 1);
-                } catch (err) {
-                    console.error('Failed to sync violation:', err);
-                }
+            try {
+                await apiRequest(`/attempts/${attemptId}/integrity-events`, {
+                    method: 'POST',
+                    body: { events: unsynced },
+                });
+                setSyncedViolationsCount((prev) => prev + unsynced.length);
+            } catch (err) {
+                console.error('Failed to sync integrity events:', err);
             }
         };
 
         void syncViolations();
-    }, [violations, attemptId, syncedViolationsCount]);
-
-    // Heartbeat to keep session alive and sync IP/UA
-    useEffect(() => {
-        if (!attemptId || attemptExpired) return;
-
-        const interval = setInterval(() => {
-            void apiRequest(`/attempts/${attemptId}/heartbeat`, { method: 'POST' })
-                .catch(err => {
-                    if (err instanceof ApiError && err.status === 410) {
-                        setAttemptExpired(true);
-                    }
-                });
-        }, 30000);
-
-        return () => clearInterval(interval);
-    }, [attemptId, attemptExpired]);
-
-    useEffect(() => {
-        if (!attemptId || attemptExpired || finishing) return;
-
-        const timer = setInterval(() => {
-            setTimeLeft((prev) => {
-                if (prev === null) return prev;
-                if (prev <= 1) {
-                    clearInterval(timer);
-                    void submit();
-                    return 0;
-                }
-                return prev - 1;
-            });
-        }, 1000);
-
-        return () => clearInterval(timer);
-    }, [attemptExpired, attemptId, finishing]);
+    }, [violations, attemptExpired, attemptId, finishing, syncedViolationsCount]);
 
     const [lastSavedAnswers, setLastSavedAnswers] = useState<string>('');
 
@@ -230,16 +206,46 @@ const TestRoom: React.FC = () => {
         };
     }, [attemptId, attemptExpired, finishing, answers, lastSavedAnswers]);
 
-    const logViolation = async (type: string, details: any = {}) => {
+    const recordIntegrityEvent = async (type: string, details: any = {}, message?: string) => {
         if (!attemptId || attemptExpired || finishing) return;
+        const occurredAt = new Date().toISOString();
         try {
-            await apiRequest(`/attempts/${attemptId}/logs`, {
+            await apiRequest(`/attempts/${attemptId}/integrity-events`, {
                 method: 'POST',
-                body: { type, details },
+                body: {
+                    type,
+                    details,
+                    message: message ?? String(type).replace(/_/g, ' '),
+                    timestamp: occurredAt,
+                    occurredAt,
+                },
             });
-            setSyncedViolationsCount(prev => prev + 1);
         } catch (error) {
-            console.error('Failed to log violation:', error);
+            console.error('Failed to record integrity event:', error);
+        }
+    };
+
+    const uploadEvidenceSnapshot = async (snapshot: WebcamSnapshot) => {
+        if (!attemptId || attemptExpired || finishing) return;
+
+        try {
+            const data = await apiRequest<EvidenceResponse>(`/attempts/${attemptId}/evidence`, {
+                method: 'POST',
+                body: {
+                    kind: 'webcam_snapshot',
+                    dataUrl: snapshot.dataUrl,
+                    capturedAt: snapshot.capturedAt,
+                    metadata: {
+                        width: snapshot.width,
+                        height: snapshot.height,
+                        reason: snapshot.reason,
+                    },
+                },
+            });
+            setEvidenceCount((prev) => prev + 1);
+            setLastEvidenceAt(data.evidence?.captured_at ?? snapshot.capturedAt);
+        } catch (error) {
+            console.error('Failed to upload evidence snapshot:', error);
         }
     };
 
@@ -355,7 +361,6 @@ const TestRoom: React.FC = () => {
     useEffect(() => {
         if (fullscreenExitCount === 0) return;
         
-        void logViolation('fullscreen_exit', { count: fullscreenExitCount });
 
         if (fullscreenExitCount === 1) {
             setShowFsWarning(true);
@@ -368,7 +373,6 @@ const TestRoom: React.FC = () => {
     useEffect(() => {
         if (tabSwitchCount === 0) return;
         
-        void logViolation('tab_switch', { count: tabSwitchCount });
 
         if (tabSwitchCount === 1) {
             setTabWarningLevel(1);
@@ -661,8 +665,17 @@ const TestRoom: React.FC = () => {
                     )}
                 </div>
 
-                <WebcamProctor onViolation={(type, details) => void logViolation(type, details)} />
-                <ProctorOverlay violations={violations} />
+                <WebcamProctor
+                    onViolation={(type, details) => void recordIntegrityEvent(type, details, type === 'camera_off' ? 'Camera access was denied, lost, or turned off.' : undefined)}
+                    onSnapshotCaptured={(snapshot) => void uploadEvidenceSnapshot(snapshot)}
+                    onCameraStatusChange={setCameraStatus}
+                />
+                <ProctorOverlay
+                    violations={violations}
+                    cameraStatus={cameraStatus}
+                    evidenceCount={evidenceCount}
+                    lastEvidenceAt={lastEvidenceAt}
+                />
             </main>
 
             {submitError && (
@@ -720,3 +733,4 @@ const TestRoom: React.FC = () => {
 };
 
 export default TestRoom;
+

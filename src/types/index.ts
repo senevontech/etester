@@ -55,6 +55,7 @@ export interface NumericQuestion extends BaseQuestion {
 export type Question = McqQuestion | CodeQuestion | TextQuestion | NumericQuestion;
 
 export type Difficulty = 'Easy' | 'Medium' | 'Hard';
+export type TestVisibility = 'assigned_only' | 'org_public';
 
 export interface Test {
     id: string;
@@ -64,6 +65,7 @@ export interface Test {
     difficulty: Difficulty;
     tags: string[];
     questions: Question[];
+    visibility: TestVisibility;
     published: boolean;
     startAt?: string;
     orgId: string;

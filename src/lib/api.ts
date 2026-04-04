@@ -21,7 +21,6 @@ const TOKEN_KEY = 'etester-api-token';
 export type Role = 'admin' | 'student';
 
 export interface ApiSession {
-    token: string;
     userId: string;
     createdAt: string;
 }
@@ -95,6 +94,7 @@ export const apiRequest = async <T>(path: string, options: ApiRequestOptions = {
 
     const response = await fetch(`${API_BASE_URL}${path}`, {
         ...options,
+        credentials: options.credentials ?? 'include',
         headers,
         body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     });

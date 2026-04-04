@@ -25,7 +25,7 @@ import {
 import { useTests } from '../../context/TestContext';
 import { useOrg } from '../../context/OrgContext';
 import { useTheme } from '../../context/ThemeContext';
-import { apiRequest } from '../../lib/api';
+import { ApiError, apiRequest } from '../../lib/api';
 import {
     Question,
     McqQuestion,
@@ -35,6 +35,7 @@ import {
     TextQuestion,
     QUESTION_CATEGORY_LABELS,
     type QuestionCategory,
+    type TestVisibility,
 } from '../../types';
 import { ImportedQuestionDraft, parseQuestionImportFile } from '../../utils/questionImport';
 
@@ -953,6 +954,7 @@ const TestEditor: React.FC = () => {
     const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
     const [testAssignments, setTestAssignments] = useState<{ groupId?: string; studentId?: string }[]>([]);
     const [savingAssignments, setSavingAssignments] = useState(false);
+    const [publishError, setPublishError] = useState<string | null>(null);
 
     const test = getTest(testId ?? '');
 
@@ -970,6 +972,20 @@ const TestEditor: React.FC = () => {
             setTestAssignments(data.assignments.map(a => ({ groupId: a.group_id, studentId: a.student_id })));
         } catch (err) {
             console.error('Failed to load assignments', err);
+        }
+    };
+
+    const handlePublishToggle = async () => {
+        if (!test) return;
+        setPublishError(null);
+        try {
+            if (test.published) {
+                await unpublishTest(test.id);
+                return;
+            }
+            await publishTest(test.id);
+        } catch (error) {
+            setPublishError(error instanceof ApiError ? error.message : 'Unable to update publish state right now.');
         }
     };
 
@@ -1038,7 +1054,7 @@ const TestEditor: React.FC = () => {
                         <button
                             className={`btn btn-sm ${test.published ? 'btn-outline' : 'btn-primary'}`}
                             style={{ gap: '0.375rem' }}
-                            onClick={() => test.published ? unpublishTest(test.id) : publishTest(test.id)}
+                            onClick={() => void handlePublishToggle()}
                         >
                             {test.published ? <><EyeOff size={13} /> Unpublish</> : <><Globe size={13} /> Publish</>}
                         </button>
@@ -1047,6 +1063,15 @@ const TestEditor: React.FC = () => {
             </header>
 
             <main className="container" style={{ paddingTop: '1.5rem', paddingBottom: '4rem', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 280px', gap: '1.5rem', alignItems: 'start' }}>
+                {publishError && (
+                    <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'flex-start', gap: '0.625rem', padding: '0.875rem 1rem', borderRadius: '10px', border: '1px solid rgba(207,58,48,0.25)', background: 'var(--danger-bg)', color: 'var(--danger)' }}>
+                        <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
+                        <div>
+                            <p className="t-small" style={{ fontWeight: 800, marginBottom: '0.2rem' }}>Cannot publish this test yet</p>
+                            <p className="t-small" style={{ lineHeight: 1.45 }}>{publishError}</p>
+                        </div>
+                    </div>
+                )}
                 <section>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
                         <p className="label" style={{ color: 'var(--text-muted)' }}>Questions ({test.questions.length})</p>
@@ -1117,6 +1142,18 @@ const TestEditor: React.FC = () => {
                                 <p className="label" style={{ marginBottom: '0.3rem' }}>Tags</p>
                                 <input className="input" placeholder="SQL, Python, ..." value={test.tags.join(', ')} onChange={(e) => updateTest(test.id, { tags: e.target.value.split(',').map((t) => t.trim()).filter(Boolean) })} />
                             </div>
+                            <div>
+                                <p className="label" style={{ marginBottom: '0.3rem' }}>Visibility</p>
+                                <select className="input" value={test.visibility} onChange={(e) => updateTest(test.id, { visibility: e.target.value as TestVisibility })}>
+                                    <option value="assigned_only">Assigned only</option>
+                                    <option value="org_public">Entire organization</option>
+                                </select>
+                                <p className="t-micro" style={{ color: 'var(--text-muted)', marginTop: '0.4rem', lineHeight: 1.45 }}>
+                                    {test.visibility === 'assigned_only'
+                                        ? 'Only assigned groups and students can start this test after it is published.'
+                                        : 'Every student in the organization can start this test once it is published.'}
+                                </p>
+                            </div>
                         </div>
                     </div>
 
@@ -1163,7 +1200,9 @@ const TestEditor: React.FC = () => {
                         </div>
                         
                         <p className="t-micro" style={{ color: 'var(--text-muted)', marginTop: '0.75rem', lineHeight: 1.4 }}>
-                            If no assignments are set, <strong>all students</strong> in the organization can see this test.
+                            {test.visibility === 'assigned_only'
+                                ? 'Assigned-only tests must include at least one selected group or student before publishing.'
+                                : 'Assignments do not restrict access in organization-wide mode. Once published, every student in the organization can see this test.'}
                         </p>
                     </div>
 

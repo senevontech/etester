@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
     ShieldCheck, 
@@ -21,18 +21,27 @@ const PreTestGate: React.FC = () => {
     const [webcamStatus, setWebcamStatus] = useState<'pending' | 'success' | 'error'>('pending');
     const [fsStatus, setFsStatus] = useState<'pending' | 'success' | 'error'>('pending');
     const [internetStatus, setInternetStatus] = useState<'pending' | 'success' | 'error'>('pending');
+    const [webcamMessage, setWebcamMessage] = useState('Checking camera access...');
     const videoRef = useRef<HTMLVideoElement>(null);
 
     const test = tests.find(t => t.id === testId);
 
     useEffect(() => {
+        let stream: MediaStream | null = null;
+
         const checkHardware = async () => {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                if (!navigator.mediaDevices?.getUserMedia) {
+                    throw new Error('This browser does not support camera access.');
+                }
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
                 setWebcamStatus('success');
+                setWebcamMessage('Camera is active.');
                 if (videoRef.current) videoRef.current.srcObject = stream;
             } catch (err) {
                 setWebcamStatus('error');
+                const message = err instanceof Error ? err.message : 'Camera access was blocked.';
+                setWebcamMessage(message);
             }
 
             // Simple internet check
@@ -49,7 +58,12 @@ const PreTestGate: React.FC = () => {
         };
 
         document.addEventListener('fullscreenchange', handleFsChange);
-        return () => document.removeEventListener('fullscreenchange', handleFsChange);
+        return () => {
+            document.removeEventListener('fullscreenchange', handleFsChange);
+            if (stream) {
+                stream.getTracks().forEach((track) => track.stop());
+            }
+        };
     }, []);
 
     const enterFullscreen = async () => {
@@ -65,6 +79,13 @@ const PreTestGate: React.FC = () => {
         if (webcamStatus !== 'success' || fsStatus !== 'success' || !agreed) return;
         navigate(`/test/${testId}`);
     };
+
+    const startWarning = useMemo(() => {
+        if (!agreed) return 'Accept the proctoring rules before starting.';
+        if (webcamStatus !== 'success') return `Camera check failed: ${webcamMessage}`;
+        if (fsStatus !== 'success') return 'Enable fullscreen to start the assessment.';
+        return '';
+    }, [agreed, fsStatus, webcamMessage, webcamStatus]);
 
     if (!test) return null;
 
@@ -135,6 +156,12 @@ const PreTestGate: React.FC = () => {
                                         {webcamStatus === 'success' ? <CheckCircle2 color="var(--success)" /> : <AlertCircle color="var(--danger)" />}
                                     </div>
                                 </div>
+                                {webcamStatus === 'error' && (
+                                    <div style={{ padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--danger)', background: 'var(--danger-bg)', color: 'var(--danger)' }}>
+                                        <p className="label" style={{ marginBottom: '0.25rem' }}>Camera Access Required</p>
+                                        <p className="t-small">{webcamMessage} Allow camera permission in your browser, then refresh this page.</p>
+                                    </div>
+                                )}
 
                                 {/* Fullscreen Check */}
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border)', background: fsStatus === 'success' ? 'var(--success-bg)' : 'transparent' }}>
@@ -167,6 +194,12 @@ const PreTestGate: React.FC = () => {
                             >
                                 Start Assessment <ChevronRight size={18} />
                             </button>
+                            {startWarning && (
+                                <div style={{ marginTop: '0.875rem', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--warning)', background: 'var(--warning-bg)', color: 'var(--warning)' }}>
+                                    <p className="label" style={{ marginBottom: '0.25rem' }}>Cannot Start Yet</p>
+                                    <p className="t-small">{startWarning}</p>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>

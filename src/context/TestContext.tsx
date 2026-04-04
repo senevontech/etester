@@ -2,9 +2,11 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { ApiError, apiRequest } from '../lib/api';
 import { useOrg } from './OrgContext';
 import { useAuth } from './AuthContext';
-import type { CodeQuestion, McqQuestion, NumericQuestion, Question, TextQuestion } from '../types';
+import type { CodeQuestion, NumericQuestion, Question, TestVisibility, TextQuestion } from '../types';
 
 export type Difficulty = 'Easy' | 'Medium' | 'Hard';
+export type { TestVisibility };
+
 
 export interface Test {
     id: string;
@@ -14,6 +16,7 @@ export interface Test {
     duration: number;
     difficulty: Difficulty;
     tags: string[];
+    visibility: TestVisibility;
     published: boolean;
     startAt: string | null;
     createdBy: string;
@@ -25,8 +28,8 @@ interface TestContextValue {
     tests: Test[];
     loading: boolean;
     getTest: (id: string) => Test | undefined;
-    createTest: (data: Omit<Test, 'id' | 'createdAt' | 'questions' | 'published' | 'created_by' | 'org_id'>) => Promise<Test | null>;
-    updateTest: (id: string, data: Partial<Omit<Test, 'id' | 'createdAt' | 'questions' | 'org_id'>>) => Promise<void>;
+    createTest: (data: Omit<Test, 'id' | 'createdAt' | 'questions' | 'published' | 'createdBy' | 'orgId'>) => Promise<Test | null>;
+    updateTest: (id: string, data: Partial<Omit<Test, 'id' | 'createdAt' | 'questions' | 'orgId'>>) => Promise<void>;
     deleteTest: (id: string) => Promise<void>;
     publishTest: (id: string) => Promise<void>;
     unpublishTest: (id: string) => Promise<void>;
@@ -107,6 +110,7 @@ const rowToTest = (row: any): Test => ({
     duration: row.duration,
     difficulty: row.difficulty as Difficulty,
     tags: row.tags ?? [],
+    visibility: row.visibility === 'org_public' ? 'org_public' : 'assigned_only',
     published: row.published,
     startAt: row.start_at,
     createdBy: row.created_by ?? '',
@@ -162,7 +166,7 @@ export const TestProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const getTest = useCallback((id: string) => tests.find(test => test.id === id), [tests]);
 
     const createTest = useCallback(async (
-        data: Omit<Test, 'id' | 'createdAt' | 'questions' | 'published' | 'created_by' | 'org_id'>
+        data: Omit<Test, 'id' | 'createdAt' | 'questions' | 'published' | 'createdBy' | 'orgId'>
     ): Promise<Test | null> => {
         if (!activeOrgId || !userId) return null;
 
@@ -187,6 +191,7 @@ export const TestProvider: React.FC<{ children: React.ReactNode }> = ({ children
             duration: rest.duration,
             difficulty: rest.difficulty,
             tags: rest.tags,
+            visibility: rest.visibility,
             published: rest.published,
         };
 

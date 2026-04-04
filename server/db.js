@@ -114,6 +114,7 @@ export const initDb = async () => {
             duration INTEGER NOT NULL DEFAULT 60,
             difficulty TEXT NOT NULL CHECK (difficulty IN ('Easy', 'Medium', 'Hard')),
             tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+            visibility TEXT NOT NULL DEFAULT 'assigned_only' CHECK (visibility IN ('assigned_only', 'org_public')),
             published BOOLEAN NOT NULL DEFAULT FALSE,
             start_at TIMESTAMPTZ,
             created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -165,6 +166,7 @@ export const initDb = async () => {
             org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
             student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             status TEXT NOT NULL CHECK (status IN ('active', 'submitted', 'expired', 'abandoned', 'in_progress', 'completed')),
+            answers JSONB NOT NULL DEFAULT '[]'::jsonb,
             started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             expires_at TIMESTAMPTZ NOT NULL,
@@ -184,6 +186,21 @@ export const initDb = async () => {
             event_type TEXT NOT NULL,
             details JSONB NOT NULL DEFAULT '{}'::jsonb,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS attempt_evidence (
+            id TEXT PRIMARY KEY,
+            attempt_id TEXT NOT NULL REFERENCES test_attempts(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK (kind IN ('webcam_snapshot')),
+            mime_type TEXT NOT NULL,
+            image_data TEXT NOT NULL,
+            byte_size INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            captured_at TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
     `);
 
@@ -208,6 +225,40 @@ export const initDb = async () => {
     await query(`
         ALTER TABLE questions
         ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'mcq';
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ADD COLUMN IF NOT EXISTS visibility TEXT;
+    `);
+
+    await query(`
+        UPDATE tests t
+        SET visibility = CASE
+            WHEN EXISTS (SELECT 1 FROM test_assignments ta WHERE ta.test_id = t.id) THEN 'assigned_only'
+            ELSE 'org_public'
+        END
+        WHERE visibility IS NULL;
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ALTER COLUMN visibility SET DEFAULT 'assigned_only';
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        DROP CONSTRAINT IF EXISTS tests_visibility_check;
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ADD CONSTRAINT tests_visibility_check CHECK (visibility IN ('assigned_only', 'org_public'));
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ALTER COLUMN visibility SET NOT NULL;
     `);
 
     await query(`
@@ -251,6 +302,11 @@ export const initDb = async () => {
     `);
 
     await query(`
+        ALTER TABLE test_attempts
+        ADD COLUMN IF NOT EXISTS answers JSONB NOT NULL DEFAULT '[]'::jsonb;
+    `);
+
+    await query(`
         ALTER TABLE submissions
         ADD COLUMN IF NOT EXISTS integrity_events JSONB NOT NULL DEFAULT '[]'::jsonb;
     `);
@@ -281,6 +337,8 @@ export const initDb = async () => {
     await query('CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON group_members(user_id);');
     await query('CREATE INDEX IF NOT EXISTS idx_test_assignments_test_id ON test_assignments(test_id);');
     await query('CREATE INDEX IF NOT EXISTS idx_attempt_logs_attempt_id ON attempt_logs(attempt_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_attempt_evidence_attempt_id ON attempt_evidence(attempt_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_attempt_evidence_captured_at ON attempt_evidence(captured_at DESC);');
 };
 
 export const closeDb = async () => {

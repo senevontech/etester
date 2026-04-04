@@ -6,7 +6,6 @@ import {
     clearStoredToken,
     getStoredToken,
     type Role,
-    storeToken,
 } from '../lib/api';
 
 export type { Role };
@@ -62,17 +61,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const syncAuthState = useCallback((nextSession: ApiSession | null, nextUser: ApiAuthUser | null) => {
         setSession(nextSession);
         setUser(mergeStoredRole(nextUser));
-
-        if (nextSession?.token) storeToken(nextSession.token);
-        else clearStoredToken();
+        clearStoredToken();
     }, []);
 
     useEffect(() => {
         const token = getStoredToken();
-        if (!token) {
-            setLoading(false);
-            return;
-        }
 
         const restore = async () => {
             try {
