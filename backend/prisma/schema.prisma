@@ -1,0 +1,257 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  STUDENT
+}
+
+enum TestVisibility {
+  ASSIGNED_ONLY
+  ORG_PUBLIC
+}
+
+enum TestDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum QuestionType {
+  MCQ
+  CODE
+  TEXT
+  NUMERIC
+}
+
+enum AttemptStatus {
+  ACTIVE
+  IN_PROGRESS
+  SUBMITTED
+  EXPIRED
+  ABANDONED
+  COMPLETED
+}
+
+model User {
+  id              String              @id @default(uuid())
+  fullName        String
+  email           String              @unique
+  passwordHash    String
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  memberships     OrganizationMember[]
+  createdOrgs     Organization[]      @relation("CreatedOrganizations")
+  createdTests    Test[]              @relation("CreatedTests")
+  groupMemberships GroupMember[]
+  assignments     TestAssignment[]
+  attempts        TestAttempt[]
+  submissions     Submission[]
+  auditLogs       AuditLog[]
+}
+
+model Organization {
+  id                String               @id @default(uuid())
+  name              String
+  slug              String               @unique
+  inviteCode        String               @unique
+  inviteCodeExpiry  DateTime?
+  inviteCodeMaxUsage Int?
+  createdById       String?
+  createdAt         DateTime             @default(now())
+  createdBy         User?                @relation("CreatedOrganizations", fields: [createdById], references: [id])
+  members           OrganizationMember[]
+  groups            Group[]
+  tests             Test[]
+  attempts          TestAttempt[]
+  submissions       Submission[]
+  auditLogs         AuditLog[]
+}
+
+model OrganizationMember {
+  id             String        @id @default(uuid())
+  orgId          String
+  userId         String
+  role           UserRole
+  joinedAt       DateTime      @default(now())
+  organization   Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, userId])
+  @@index([userId])
+}
+
+model Group {
+  id          String        @id @default(uuid())
+  orgId       String
+  name        String
+  description String        @default("")
+  createdAt   DateTime      @default(now())
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  members     GroupMember[]
+  assignments TestAssignment[]
+}
+
+model GroupMember {
+  id        String   @id @default(uuid())
+  groupId   String
+  userId    String
+  joinedAt  DateTime @default(now())
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([userId])
+}
+
+model Test {
+  id          String          @id @default(uuid())
+  orgId       String
+  title       String
+  description String          @default("")
+  duration    Int             @default(60)
+  difficulty  TestDifficulty  @default(MEDIUM)
+  tags        String[]        @default([])
+  visibility  TestVisibility  @default(ASSIGNED_ONLY)
+  published   Boolean         @default(false)
+  startAt     DateTime?
+  createdById String?
+  createdAt   DateTime        @default(now())
+  organization Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy    User?          @relation("CreatedTests", fields: [createdById], references: [id])
+  questions    Question[]
+  assignments  TestAssignment[]
+  attempts     TestAttempt[]
+  submissions  Submission[]
+}
+
+model Question {
+  id                String       @id @default(uuid())
+  testId            String
+  type              QuestionType
+  category          String
+  title             String
+  description       String       @default("")
+  imageUrl          String?
+  points            Int          @default(0)
+  position          Int          @default(0)
+  options           Json?
+  answer            Int?
+  acceptedAnswers   Json?
+  caseSensitive     Boolean      @default(false)
+  numericAnswer     Float?
+  numericTolerance  Float        @default(0)
+  template          String?
+  language          String?
+  constraints       Json?
+  examples          Json?
+  testCases         Json?
+  createdAt         DateTime     @default(now())
+  test              Test         @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  @@index([testId, position])
+}
+
+model TestAssignment {
+  id         String   @id @default(uuid())
+  testId      String
+  studentId   String?
+  groupId     String?
+  assignedAt  DateTime @default(now())
+  test        Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  student     User?    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  group       Group?   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@index([testId])
+}
+
+model TestAttempt {
+  id               String        @id @default(uuid())
+  testId           String
+  orgId            String
+  studentId        String
+  status           AttemptStatus
+  answers          Json          @default("[]")
+  startedAt        DateTime      @default(now())
+  lastHeartbeatAt  DateTime      @default(now())
+  expiresAt        DateTime
+  submittedAt      DateTime?
+  violationsCount  Int           @default(0)
+  violationScore   Int?
+  integrityEvents  Json          @default("[]")
+  ipAddress        String?
+  userAgent        String?
+  test             Test          @relation(fields: [testId], references: [id], onDelete: Cascade)
+  organization     Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  student          User          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  logs             AttemptLog[]
+  evidence         AttemptEvidence[]
+}
+
+model AttemptLog {
+  id         String      @id @default(uuid())
+  attemptId   String
+  eventType   String
+  details     Json        @default("{}")
+  timestamp   DateTime    @default(now())
+  attempt     TestAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId])
+}
+
+model AttemptEvidence {
+  id         String      @id @default(uuid())
+  attemptId   String
+  kind        String
+  mimeType    String
+  imageData   String
+  byteSize    Int
+  sha256      String
+  metadata    Json        @default("{}")
+  capturedAt  DateTime
+  createdAt   DateTime    @default(now())
+  attempt     TestAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId, capturedAt])
+}
+
+model Submission {
+  id              String        @id @default(uuid())
+  testId          String
+  orgId           String
+  studentId       String
+  studentName     String
+  attemptId       String?       @unique
+  answers         Json          @default("[]")
+  score           Int           @default(0)
+  totalPoints     Int           @default(0)
+  integrityScore  Int           @default(100)
+  violationsCount Int           @default(0)
+  integrityEvents Json          @default("[]")
+  submittedAt     DateTime      @default(now())
+  test            Test          @relation(fields: [testId], references: [id], onDelete: Cascade)
+  organization    Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  student         User          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id           String        @id @default(uuid())
+  orgId        String?
+  actorUserId  String?
+  action       String
+  entityType   String
+  entityId     String?
+  metadata     Json          @default("{}")
+  ipAddress    String?
+  createdAt    DateTime      @default(now())
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  actor        User?         @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([orgId, createdAt])
+}
