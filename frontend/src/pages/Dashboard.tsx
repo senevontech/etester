@@ -15,6 +15,26 @@ const Dashboard: React.FC = () => {
     const [search, setSearch] = useState('');
     const [activeTab, setActiveTab] = useState<'Active' | 'Upcoming' | 'Completed'>('Active');
 
+    const formatDateTime = (value?: string | null) => {
+        if (!value) return 'Not scheduled';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return 'Invalid schedule';
+        return date.toLocaleString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+        });
+    };
+
+    const formatExamWindow = (test: { startAt: string | null; endAt: string | null; createdAt: string }) => {
+        if (test.startAt || test.endAt) {
+            return `${formatDateTime(test.startAt)} to ${formatDateTime(test.endAt)}`;
+        }
+        return new Date(test.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    };
+
     const mySubmissions = user ? getStudentSubmissions(user.id) : [];
     const completedTestIds = new Set(mySubmissions.map((s) => s.testId));
 
@@ -179,7 +199,7 @@ const Dashboard: React.FC = () => {
                             <TestCard
                                 key={test.id}
                                 {...test}
-                                date={test.startAt ? new Date(test.startAt).toLocaleString() : new Date(test.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                                date={formatExamWindow(test)}
                             />
                         ))}
                     </div>

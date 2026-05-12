@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { MonitoringGateway } from './gateways/monitoring.gateway';

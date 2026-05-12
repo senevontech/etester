@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { IsArray, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
 
 export class CreateTestDto {

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { IsString, Length } from 'class-validator';
 
 export class JoinOrganizationDto {

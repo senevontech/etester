@@ -1,5 +1,5 @@
 import React from 'react';
-import { Clock, ArrowUpRight } from 'lucide-react';
+import { Clock, ArrowUpRight, CalendarClock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 interface TestCardProps {
@@ -37,7 +37,10 @@ const TestCard: React.FC<TestCardProps> = ({ id, title, duration, date, tags }) 
                 >
                     {title}
                 </h3>
-                <p className="t-small" style={{ color: 'var(--text-muted)' }}>{date}</p>
+                <p className="t-small" style={{ color: 'var(--text-muted)', display: 'flex', gap: '0.375rem', alignItems: 'flex-start', lineHeight: 1.45 }}>
+                    <CalendarClock size={13} style={{ flexShrink: 0, marginTop: '2px' }} />
+                    <span>{date}</span>
+                </p>
             </div>
 
             {/* Tags */}

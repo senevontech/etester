@@ -57,6 +57,7 @@ const AnswerDetail: React.FC<{ answer: AnswerPayload; question?: Question }> = (
     const earned = answer.pointsEarned ?? 0;
     const total = getQuestionPoints(question);
     const fullCredit = total > 0 && earned >= total;
+    const negative = earned < 0 || answer.negativeMarkApplied;
     const submitted = renderSubmittedAnswer(answer, question);
 
     return (
@@ -68,7 +69,7 @@ const AnswerDetail: React.FC<{ answer: AnswerPayload; question?: Question }> = (
                     </p>
                     <p className="t-small" style={{ color: 'var(--text-muted)' }}>{question?.type.toUpperCase() ?? answer.type.toUpperCase()}</p>
                 </div>
-                <span className={`badge ${fullCredit ? 'badge-success' : 'badge-neutral'}`} style={{ flexShrink: 0 }}>
+                <span className={`badge ${negative ? 'badge-danger' : fullCredit ? 'badge-success' : 'badge-neutral'}`} style={{ flexShrink: 0 }}>
                     {earned} / {total} pts
                 </span>
             </div>

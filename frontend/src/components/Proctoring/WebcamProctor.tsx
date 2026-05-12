@@ -294,7 +294,7 @@ const WebcamProctor: React.FC<WebcamProctorProps> = ({ onViolation, onFaceViolat
     };
 
     return (
-        <div style={{
+        <div className="webcam-proctor" style={{
             position: 'fixed',
             bottom: '1.5rem',
             right: '1.5rem',
@@ -379,6 +379,23 @@ const WebcamProctor: React.FC<WebcamProctorProps> = ({ onViolation, onFaceViolat
                     )}
                 </div>
             )}
+            <style>{`
+                @media (max-width: 900px) {
+                    .webcam-proctor {
+                        width: 132px !important;
+                        right: 0.75rem !important;
+                        bottom: 0.75rem !important;
+                        border-radius: 10px !important;
+                    }
+                    .webcam-proctor video,
+                    .webcam-proctor > div:first-child {
+                        height: 92px !important;
+                    }
+                    .webcam-proctor span {
+                        font-size: 8px !important;
+                    }
+                }
+            `}</style>
         </div>
     );
 };

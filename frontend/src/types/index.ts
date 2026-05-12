@@ -62,6 +62,9 @@ export interface Test {
     tags: string[];
     questions: Question[];
     published: boolean;
+    negativeMarkingEnabled: boolean;
+    negativeMarkValue: number;
+    showAnswersAfterExam: boolean;
     allowedEmails?: string[];
     hasAccessCode?: boolean;
     accessCode?: string | null;
@@ -104,6 +107,7 @@ export interface AnswerPayload {
     language?: string;  // for Code
     response?: string;  // for short answer / numerical
     pointsEarned: number;
+    negativeMarkApplied?: boolean;
 }
 
 export interface IntegrityEvent {

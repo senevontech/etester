@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useResults } from '../context/ResultContext';
 import { useAuth } from '../context/AuthContext';
 import { useTests } from '../context/TestContext';
@@ -9,7 +9,7 @@ import {
     Award, TrendingUp,
 } from 'lucide-react';
 import type { Submission } from '../context/ResultContext';
-import { QUESTION_CATEGORY_LABELS } from '../types';
+import { QUESTION_CATEGORY_LABELS, type Question } from '../types';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -25,15 +25,30 @@ const pctColor = (pct: number) =>
 const integrityColor = (score: number) =>
     score >= 90 ? 'var(--success)' : score >= 70 ? 'var(--warning)' : 'var(--danger)';
 
+const renderCorrectAnswer = (question?: Question) => {
+    if (!question) return '';
+    if (question.type === 'mcq') {
+        return typeof question.answer === 'number' ? question.options[question.answer] ?? `Option ${question.answer + 1}` : '';
+    }
+    if (question.type === 'text') {
+        return question.acceptedAnswers.length > 0 ? question.acceptedAnswers.join(', ') : '';
+    }
+    if (question.type === 'numeric') {
+        return question.answer === undefined ? '' : `${question.answer}${question.tolerance ? ` (+/- ${question.tolerance})` : ''}`;
+    }
+    return 'Coding answer is checked by test cases.';
+};
+
 // ── Submission card ───────────────────────────────────────────────────────────
 
 interface SubCardProps {
     sub: Submission;
     testTitle: string;
-    questions: { id: string; title: string; points: number; type: string; category: keyof typeof QUESTION_CATEGORY_LABELS }[];
+    questions: Question[];
+    showAnswers: boolean;
 }
 
-const SubCard: React.FC<SubCardProps> = ({ sub, testTitle, questions }) => {
+const SubCard: React.FC<SubCardProps> = ({ sub, testTitle, questions, showAnswers }) => {
     const [expanded, setExpanded] = useState(false);
     const pct = scorePct(sub);
     const tabSwitches = countViolation(sub, 'TAB_SWITCH');
@@ -127,9 +142,13 @@ const SubCard: React.FC<SubCardProps> = ({ sub, testTitle, questions }) => {
                                     const q = questions.find(x => x.id === ans.questionId);
                                     const full = ans.pointsEarned === (q?.points ?? 0);
                                     const partial = !full && ans.pointsEarned > 0;
+                                    const negative = ans.pointsEarned < 0 || ans.negativeMarkApplied;
+                                    const correctAnswer = showAnswers ? renderCorrectAnswer(q) : '';
                                     return (
-                                        <div key={ans.questionId} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', padding: '0.5rem 0.625rem', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px' }}>
-                                            {full
+                                        <div key={ans.questionId} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', padding: '0.5rem 0.625rem', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px' }}>
+                                            {negative
+                                                ? <XCircle size={13} style={{ color: 'var(--danger)', flexShrink: 0 }} />
+                                                : full
                                                 ? <CheckCircle2 size={13} style={{ color: 'var(--success)', flexShrink: 0 }} />
                                                 : partial
                                                     ? <Activity size={13} style={{ color: 'var(--warning)', flexShrink: 0 }} />
@@ -144,6 +163,11 @@ const SubCard: React.FC<SubCardProps> = ({ sub, testTitle, questions }) => {
                                                         [{q ? QUESTION_CATEGORY_LABELS[q.category] : ans.type}]
                                                     </span>
                                                 </p>
+                                                {correctAnswer && (
+                                                    <p className="t-small" style={{ color: 'var(--success)', marginTop: '0.3rem', lineHeight: 1.35 }}>
+                                                        Correct answer: {correctAnswer}
+                                                    </p>
+                                                )}
                                             </div>
                                         </div>
                                     );
@@ -181,7 +205,11 @@ const SubCard: React.FC<SubCardProps> = ({ sub, testTitle, questions }) => {
 const Progress: React.FC = () => {
     const { user } = useAuth();
     const { getStudentSubmissions } = useResults();
-    const { getTest } = useTests();
+    const { getTest, refetch } = useTests();
+
+    useEffect(() => {
+        void refetch();
+    }, [refetch]);
 
     if (!user) return null;
 
@@ -278,19 +306,14 @@ const Progress: React.FC = () => {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
                             {mySubmissions.map(sub => {
                                 const test = getTest(sub.testId);
-                                const questions = (test?.questions ?? []).map(q => ({
-                                    id: q.id,
-                                    title: q.title,
-                                    points: q.points,
-                                    type: q.type,
-                                    category: q.category,
-                                }));
+                                const questions = test?.questions ?? [];
                                 return (
                                     <SubCard
                                         key={sub.id}
                                         sub={sub}
                                         testTitle={test?.title ?? 'Unknown Assessment'}
                                         questions={questions}
+                                        showAnswers={Boolean(test?.showAnswersAfterExam)}
                                     />
                                 );
                             })}

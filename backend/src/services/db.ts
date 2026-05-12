@@ -156,6 +156,9 @@ export const initDb = async () => {
             tags JSONB NOT NULL DEFAULT '[]'::jsonb,
             visibility TEXT NOT NULL DEFAULT 'assigned_only' CHECK (visibility IN ('assigned_only', 'org_public')),
             published BOOLEAN NOT NULL DEFAULT FALSE,
+            negative_marking_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+            negative_mark_value NUMERIC NOT NULL DEFAULT 0,
+            show_answers_after_exam BOOLEAN NOT NULL DEFAULT FALSE,
             allowed_emails JSONB NOT NULL DEFAULT '[]'::jsonb,
             access_code TEXT,
             access_code_hash TEXT,
@@ -186,6 +189,27 @@ export const initDb = async () => {
     await query(`
         ALTER TABLE tests
         ADD COLUMN IF NOT EXISTS allowed_emails JSONB NOT NULL DEFAULT '[]'::jsonb;
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ADD COLUMN IF NOT EXISTS negative_marking_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ADD COLUMN IF NOT EXISTS negative_mark_value NUMERIC NOT NULL DEFAULT 0;
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ALTER COLUMN negative_mark_value TYPE NUMERIC
+        USING negative_mark_value::numeric;
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ADD COLUMN IF NOT EXISTS show_answers_after_exam BOOLEAN NOT NULL DEFAULT FALSE;
     `);
 
     await query(`
@@ -338,7 +362,7 @@ export const initDb = async () => {
             student_name TEXT NOT NULL,
             attempt_id TEXT UNIQUE,
             answers JSONB NOT NULL DEFAULT '[]'::jsonb,
-            score INTEGER NOT NULL DEFAULT 0,
+            score NUMERIC NOT NULL DEFAULT 0,
             total_points INTEGER NOT NULL DEFAULT 0,
             integrity_score INTEGER NOT NULL DEFAULT 100,
             violations_count INTEGER NOT NULL DEFAULT 0,
@@ -352,6 +376,12 @@ export const initDb = async () => {
     await query(`
         ALTER TABLE questions
         ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'mcq';
+    `);
+
+    await query(`
+        ALTER TABLE submissions
+        ALTER COLUMN score TYPE NUMERIC
+        USING score::numeric;
     `);
 
     await query(`

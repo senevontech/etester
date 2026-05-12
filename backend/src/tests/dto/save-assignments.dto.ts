@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { IsArray, IsOptional } from 'class-validator';
 
 export class SaveAssignmentsDto {

@@ -27,8 +27,10 @@ import {
     Mic,
     Monitor,
     Laptop,
+    CalendarClock,
 } from 'lucide-react';
 import { useTests, type TestSecuritySettings } from '../../context/TestContext';
+import ConfirmDialog from '../../components/Modals/ConfirmDialog';
 import { useOrg } from '../../context/OrgContext';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -65,6 +67,12 @@ const toDateTimeLocalValue = (value?: string | null) => {
     if (Number.isNaN(date.getTime())) return '';
     const offsetMs = date.getTimezoneOffset() * 60 * 1000;
     return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+};
+
+const parseNegativeMarkValue = (value: string, fallback = 1) => {
+    const parsed = Number(value.trim().replace(',', '.'));
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(0.01, Math.round(parsed * 100) / 100);
 };
 
 const MCQ_TEMPLATE: Omit<McqQuestion, 'id'> = {
@@ -1094,6 +1102,19 @@ const PublishModal: React.FC<PublishModalProps> = ({ test, onClose, onPublish })
     );
 };
 
+const formatDateTimeLabel = (value?: string | null) => {
+    if (!value) return 'Not set';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Invalid date';
+    return date.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+    });
+};
+
 const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({ initial, onClose, onSave }) => {
     const [settings, setSettings] = useState<TestSecuritySettings>(initial);
     const [saving, setSaving] = useState(false);
@@ -1290,8 +1311,23 @@ const TestEditor: React.FC = () => {
     const [savingAssignments, setSavingAssignments] = useState(false);
     const [showPublishModal, setShowPublishModal] = useState(false);
     const [showSecurityModal, setShowSecurityModal] = useState(false);
+    const [showAnswerRevealConfirm, setShowAnswerRevealConfirm] = useState(false);
+    const [scheduleStatus, setScheduleStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const [scheduleMessage, setScheduleMessage] = useState('');
+    const [negativeStatus, setNegativeStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const [negativeMessage, setNegativeMessage] = useState('');
+    const [answerRevealStatus, setAnswerRevealStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const [answerRevealMessage, setAnswerRevealMessage] = useState('');
+    const [negativeEnabledDraft, setNegativeEnabledDraft] = useState(false);
+    const [negativeValueDraft, setNegativeValueDraft] = useState('1');
 
     const test = getTest(testId ?? '');
+
+    useEffect(() => {
+        if (!test) return;
+        setNegativeEnabledDraft(test.negativeMarkingEnabled);
+        setNegativeValueDraft(String(test.negativeMarkValue || 1));
+    }, [test?.id, test?.negativeMarkingEnabled, test?.negativeMarkValue]);
 
     useEffect(() => {
         if (testId) {
@@ -1341,6 +1377,89 @@ const TestEditor: React.FC = () => {
             console.error('Failed to save assignments', err);
         } finally {
             setSavingAssignments(false);
+        }
+    };
+
+    const updateExamSchedule = async (field: 'startAt' | 'endAt', localValue: string) => {
+        if (!test) return;
+
+        const nextIso = localValue ? new Date(localValue).toISOString() : null;
+        const currentStart = field === 'startAt' ? nextIso : test.startAt;
+        const currentEnd = field === 'endAt' ? nextIso : test.endAt;
+        const patch: { startAt?: string | null; endAt?: string | null } = { [field]: nextIso };
+
+        if (currentStart && currentEnd) {
+            const startMs = new Date(currentStart).getTime();
+            const endMs = new Date(currentEnd).getTime();
+
+            if (!Number.isNaN(startMs) && !Number.isNaN(endMs) && endMs <= startMs) {
+                if (field === 'startAt') {
+                    patch.endAt = new Date(startMs + Math.max(test.duration, 5) * 60000).toISOString();
+                } else {
+                    setScheduleStatus('error');
+                    setScheduleMessage('Exam end date and time must be after the start date and time.');
+                    return;
+                }
+            }
+        }
+
+        setScheduleStatus('saving');
+        setScheduleMessage('Saving exam schedule...');
+        await updateTest(test.id, patch);
+        setScheduleStatus('saved');
+        setScheduleMessage('Exam schedule updated.');
+        window.setTimeout(() => setScheduleStatus('idle'), 1800);
+    };
+
+    const saveNegativeMarking = async (enabled = negativeEnabledDraft, rawValue = negativeValueDraft) => {
+        if (!test) return;
+
+        const nextValue = enabled ? parseNegativeMarkValue(rawValue) : 0;
+        setNegativeEnabledDraft(enabled);
+        setNegativeValueDraft(String(nextValue || 1));
+        setNegativeStatus('saving');
+        setNegativeMessage('Saving negative marking...');
+
+        try {
+            await updateTest(test.id, {
+                negativeMarkingEnabled: enabled,
+                negativeMarkValue: nextValue,
+            });
+            setNegativeStatus('saved');
+            setNegativeMessage(enabled ? `Negative marking active: -${nextValue} per wrong answer.` : 'Negative marking disabled.');
+            window.setTimeout(() => setNegativeStatus('idle'), 2000);
+        } catch (error) {
+            setNegativeStatus('error');
+            setNegativeMessage(error instanceof Error ? error.message : 'Could not save negative marking.');
+        }
+    };
+
+    const toggleAnswerReveal = async () => {
+        if (!test) return;
+
+        const nextEnabled = !test.showAnswersAfterExam;
+        if (nextEnabled) {
+            setShowAnswerRevealConfirm(true);
+            return;
+        }
+
+        await saveAnswerReveal(false);
+    };
+
+    const saveAnswerReveal = async (enabled: boolean) => {
+        if (!test) return;
+
+        setAnswerRevealStatus('saving');
+        setAnswerRevealMessage(enabled ? 'Enabling answer reveal...' : 'Disabling answer reveal...');
+
+        try {
+            await updateTest(test.id, { showAnswersAfterExam: enabled });
+            setAnswerRevealStatus('saved');
+            setAnswerRevealMessage(enabled ? 'Answers will show after submission.' : 'Answers are hidden from students.');
+            window.setTimeout(() => setAnswerRevealStatus('idle'), 2000);
+        } catch (error) {
+            setAnswerRevealStatus('error');
+            setAnswerRevealMessage(error instanceof Error ? error.message : 'Could not update answer reveal.');
         }
     };
 
@@ -1454,24 +1573,113 @@ const TestEditor: React.FC = () => {
                                 <p className="label" style={{ marginBottom: '0.3rem' }}>Duration (min)</p>
                                 <input className="input" type="number" min={5} value={test.duration} onChange={(e) => updateTest(test.id, { duration: Number(e.target.value) })} />
                             </div>
-                            <div>
-                                <p className="label" style={{ marginBottom: '0.3rem' }}>Exam Start Date & Time</p>
-                                <input
-                                    className="input"
-                                    type="datetime-local"
-                                    value={toDateTimeLocalValue(test.startAt)}
-                                    onChange={(e) => updateTest(test.id, { startAt: e.target.value ? new Date(e.target.value).toISOString() : null })}
-                                />
+                            <div style={{ padding: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-subtle)' }}>
+                                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <p className="label" style={{ marginBottom: '0.25rem' }}>Negative Marking</p>
+                                        <p className="t-small" style={{ color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                                            Deduct marks for wrong attempted answers. Unanswered questions are not penalized.
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className={`btn btn-sm ${negativeEnabledDraft ? 'btn-primary' : 'btn-outline'}`}
+                                        onClick={() => void saveNegativeMarking(!negativeEnabledDraft, negativeValueDraft)}
+                                        disabled={negativeStatus === 'saving'}
+                                    >
+                                        {negativeEnabledDraft ? 'Disable' : 'Enable'}
+                                    </button>
+                                </div>
+                                {negativeEnabledDraft && (
+                                    <div style={{ marginTop: '0.75rem' }}>
+                                        <p className="label" style={{ marginBottom: '0.3rem' }}>Deduct points per wrong answer</p>
+                                        <input
+                                            className="input"
+                                            type="text"
+                                            inputMode="decimal"
+                                            pattern="[0-9]*[.,]?[0-9]*"
+                                            value={negativeValueDraft}
+                                            onChange={(e) => setNegativeValueDraft(e.target.value)}
+                                        />
+                                        <p className="t-small" style={{ color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.4 }}>
+                                            Current rule: -{parseNegativeMarkValue(negativeValueDraft)} point{parseNegativeMarkValue(negativeValueDraft) === 1 ? '' : 's'} for every wrong attempted answer.
+                                        </p>
+                                        <button
+                                            type="button"
+                                            className="btn btn-sm btn-primary"
+                                            style={{ width: '100%', marginTop: '0.65rem' }}
+                                            onClick={() => void saveNegativeMarking(true, negativeValueDraft)}
+                                            disabled={negativeStatus === 'saving'}
+                                        >
+                                            Save Negative Marking
+                                        </button>
+                                    </div>
+                                )}
+                                {negativeStatus !== 'idle' && (
+                                    <p className="t-small" style={{ color: negativeStatus === 'error' ? 'var(--danger)' : negativeStatus === 'saved' ? 'var(--success)' : 'var(--text-muted)', marginTop: '0.6rem', fontWeight: 800 }}>
+                                        {negativeMessage}
+                                    </p>
+                                )}
                             </div>
-                            <div>
-                                <p className="label" style={{ marginBottom: '0.3rem' }}>Exam End Date & Time</p>
-                                <input
-                                    className="input"
-                                    type="datetime-local"
-                                    min={toDateTimeLocalValue(test.startAt) || undefined}
-                                    value={toDateTimeLocalValue(test.endAt)}
-                                    onChange={(e) => updateTest(test.id, { endAt: e.target.value ? new Date(e.target.value).toISOString() : null })}
-                                />
+                            <div style={{ padding: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-subtle)' }}>
+                                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <p className="label" style={{ marginBottom: '0.25rem' }}>Show Answers After Exam</p>
+                                        <p className="t-small" style={{ color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                                            Automatically show correct answers to students only after they submit this exam.
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className={`btn btn-sm ${test.showAnswersAfterExam ? 'btn-primary' : 'btn-outline'}`}
+                                        onClick={() => void toggleAnswerReveal()}
+                                        disabled={answerRevealStatus === 'saving'}
+                                    >
+                                        {test.showAnswersAfterExam ? 'Disable' : 'Enable'}
+                                    </button>
+                                </div>
+                                {answerRevealStatus !== 'idle' && (
+                                    <p className="t-small" style={{ color: answerRevealStatus === 'error' ? 'var(--danger)' : answerRevealStatus === 'saved' ? 'var(--success)' : 'var(--text-muted)', marginTop: '0.6rem', fontWeight: 800 }}>
+                                        {answerRevealMessage}
+                                    </p>
+                                )}
+                            </div>
+                            <div style={{ padding: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-subtle)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.65rem' }}>
+                                    <p className="label" style={{ color: 'var(--text-muted)' }}>Exam Schedule</p>
+                                    {scheduleStatus !== 'idle' && (
+                                        <span className="t-micro" style={{ color: scheduleStatus === 'error' ? 'var(--danger)' : scheduleStatus === 'saved' ? 'var(--success)' : 'var(--text-muted)', fontWeight: 800 }}>
+                                            {scheduleMessage}
+                                        </span>
+                                    )}
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.625rem' }}>
+                                    <div>
+                                        <p className="label" style={{ marginBottom: '0.3rem' }}>Starts</p>
+                                        <input
+                                            className="input"
+                                            type="datetime-local"
+                                            value={toDateTimeLocalValue(test.startAt)}
+                                            onChange={(e) => void updateExamSchedule('startAt', e.target.value)}
+                                        />
+                                    </div>
+                                    <div>
+                                        <p className="label" style={{ marginBottom: '0.3rem' }}>Ends</p>
+                                        <input
+                                            className="input"
+                                            type="datetime-local"
+                                            min={toDateTimeLocalValue(test.startAt) || undefined}
+                                            value={toDateTimeLocalValue(test.endAt)}
+                                            onChange={(e) => void updateExamSchedule('endAt', e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginTop: '0.65rem', color: 'var(--text-muted)' }}>
+                                    <CalendarClock size={14} style={{ marginTop: '2px', flexShrink: 0 }} />
+                                    <p className="t-small" style={{ lineHeight: 1.5 }}>
+                                        {formatDateTimeLabel(test.startAt)} to {formatDateTimeLabel(test.endAt)}
+                                    </p>
+                                </div>
                             </div>
                             <div>
                                 <p className="label" style={{ marginBottom: '0.3rem' }}>Tags</p>
@@ -1595,6 +1803,18 @@ const TestEditor: React.FC = () => {
                     onSave={(settings) => updateTest(test.id, { securitySettings: settings })}
                 />
             )}
+            <ConfirmDialog
+                open={showAnswerRevealConfirm}
+                title="Show Answers After Exam?"
+                message="Students will be able to review correct answers after they submit this exam. Answers remain hidden before and during the exam."
+                confirmLabel="Enable"
+                loading={answerRevealStatus === 'saving'}
+                onClose={() => setShowAnswerRevealConfirm(false)}
+                onConfirm={() => {
+                    setShowAnswerRevealConfirm(false);
+                    void saveAnswerReveal(true);
+                }}
+            />
 
             <style>{`@media(max-width:768px){ main.container { grid-template-columns:1fr!important; } }`}</style>
         </div>

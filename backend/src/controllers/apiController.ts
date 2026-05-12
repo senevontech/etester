@@ -352,6 +352,13 @@ const parseTestWindowInput = (startValue, endValue) => {
     return { startAt, endAt };
 };
 
+const parseNegativeMarkValue = (value, fallback = 0) => {
+    const normalized = typeof value === 'string' ? value.trim().replace(',', '.') : value;
+    const parsed = Number(normalized ?? fallback);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(0, Math.round(parsed * 100) / 100);
+};
+
 const getTestWindow = (test) => {
     if (!test.start_at || !test.end_at) return null;
 
@@ -392,10 +399,11 @@ const mapQuestionRow = (row) => ({
     created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
 });
 
-const serializeQuestionForRole = (row, role) => {
+const serializeQuestionForRole = (row, role, revealAnswers = false) => {
     const question = mapQuestionRow(row);
 
     if (role === 'subadmin' || role === 'admin') return question;
+    if (revealAnswers) return question;
 
     if (question.type === 'mcq') {
         return {
@@ -426,9 +434,12 @@ const serializeQuestionForRole = (row, role) => {
     };
 };
 
-const mapTestRow = (row, questions = [], role = 'subadmin') => ({
+const mapTestRow = (row, questions = [], role = 'subadmin', options: { revealAnswers?: boolean } = {}) => ({
     ...row,
     tags: row.tags ?? [],
+    negative_marking_enabled: Boolean(row.negative_marking_enabled),
+    negative_mark_value: Number(row.negative_mark_value ?? 0),
+    show_answers_after_exam: Boolean(row.show_answers_after_exam),
     allowed_emails: normalizeAllowedEmails(row.allowed_emails),
     security_settings: normalizeTestSecuritySettings(row.security_settings),
     has_access_code: Boolean(row.access_code),
@@ -437,12 +448,14 @@ const mapTestRow = (row, questions = [], role = 'subadmin') => ({
     start_at: row.start_at instanceof Date ? row.start_at.toISOString() : row.start_at,
     end_at: row.end_at instanceof Date ? row.end_at.toISOString() : row.end_at,
     created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
-    questions: questions.map((question) => serializeQuestionForRole(question, role)),
+    questions: questions.map((question) => serializeQuestionForRole(question, role, Boolean(options.revealAnswers))),
 });
 
 const mapSubmissionRow = (row) => ({
     ...row,
     answers: row.answers ?? [],
+    score: Number(row.score ?? 0),
+    total_points: Number(row.total_points ?? 0),
     integrity_events: row.integrity_events ?? [],
     submitted_at: row.submitted_at instanceof Date ? row.submitted_at.toISOString() : row.submitted_at,
     started_at: row.started_at instanceof Date ? row.started_at.toISOString() : row.started_at,
@@ -570,6 +583,40 @@ const requireAuth = async (req) => {
 const getMembership = async (userId, orgId) => {
     const { rows } = await query('SELECT * FROM org_members WHERE user_id = $1 AND org_id = $2 LIMIT 1', [userId, orgId]);
     return rows[0] ?? null;
+};
+
+let negativeMarkingColumnsReady = false;
+const ensureNegativeMarkingColumns = async () => {
+    if (negativeMarkingColumnsReady) return;
+
+    await query(`
+        ALTER TABLE tests
+        ADD COLUMN IF NOT EXISTS negative_marking_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ADD COLUMN IF NOT EXISTS negative_mark_value NUMERIC NOT NULL DEFAULT 0;
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ALTER COLUMN negative_mark_value TYPE NUMERIC
+        USING negative_mark_value::numeric;
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ADD COLUMN IF NOT EXISTS show_answers_after_exam BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
+    await query(`
+        ALTER TABLE IF EXISTS submissions
+        ALTER COLUMN score TYPE NUMERIC
+        USING score::numeric;
+    `);
+
+    negativeMarkingColumnsReady = true;
 };
 
 const requireMembership = async (userId, orgId) => {
@@ -827,7 +874,30 @@ const evaluateNumericAnswer = (question, submitted) => {
     return normalized;
 };
 
-const buildSubmissionAnswers = async (questionRows, incomingAnswers) => {
+const hasAttemptedAnswer = (question, normalized) => {
+    if (question.type === 'mcq') return normalized.choice !== undefined;
+    if (question.type === 'code') return Boolean(String(normalized.code || '').trim());
+    return Boolean(String(normalized.response || '').trim());
+};
+
+const applyNegativeMarking = (question, normalized, options) => {
+    if (!options.enabled || options.value <= 0) return normalized;
+    if (!hasAttemptedAnswer(question, normalized)) return normalized;
+    if (Number(normalized.pointsEarned || 0) > 0) return normalized;
+
+    return {
+        ...normalized,
+        pointsEarned: -options.value,
+        negativeMarkApplied: true,
+    };
+};
+
+const buildSubmissionAnswers = async (questionRows, incomingAnswers, negativeMarking = {}) => {
+    const negativeConfig: any = negativeMarking;
+    const negativeOptions = {
+        enabled: Boolean(negativeConfig.enabled),
+        value: parseNegativeMarkValue(negativeConfig.value),
+    };
     const answersByQuestionId = new Map(
         (Array.isArray(incomingAnswers) ? incomingAnswers : [])
             .filter((answer) => answer && typeof answer === 'object' && typeof answer.questionId === 'string')
@@ -853,26 +923,27 @@ const buildSubmissionAnswers = async (questionRows, incomingAnswers) => {
             if (choice === question.answer) {
                 normalized.pointsEarned = question.points;
             }
-            score += normalized.pointsEarned;
-            answers.push(normalized);
+            const graded = applyNegativeMarking(question, normalized, negativeOptions);
+            score += graded.pointsEarned;
+            answers.push(graded);
             continue;
         }
 
         if (question.type === 'text') {
-            const normalized = evaluateTextAnswer(question, submitted);
+            const normalized = applyNegativeMarking(question, evaluateTextAnswer(question, submitted), negativeOptions);
             score += normalized.pointsEarned;
             answers.push(normalized);
             continue;
         }
 
         if (question.type === 'numeric') {
-            const normalized = evaluateNumericAnswer(question, submitted);
+            const normalized = applyNegativeMarking(question, evaluateNumericAnswer(question, submitted), negativeOptions);
             score += normalized.pointsEarned;
             answers.push(normalized);
             continue;
         }
 
-        const normalized = await evaluateCodeAnswer(question, submitted);
+        const normalized = applyNegativeMarking(question, await evaluateCodeAnswer(question, submitted), negativeOptions);
         score += normalized.pointsEarned;
         answers.push(normalized);
     }
@@ -1461,6 +1532,7 @@ export const handleRequest = async (req, res) => {
 
     match = pathname.match(/^\/api\/orgs\/([^/]+)\/tests$/);
     if (req.method === 'GET' && match) {
+        await ensureNegativeMarkingColumns();
         const { user } = await requireAuth(req);
         const orgId = decodeURIComponent(match[1]);
         const membership = await requireMembership(user.id, orgId);
@@ -1496,14 +1568,30 @@ export const handleRequest = async (req, res) => {
 
         const testIds = visibleTestRows.map((row) => row.id);
         const questionRows = await fetchQuestionsByTestIds(testIds);
+        let submittedTestIds = new Set();
+        if (membership.role !== 'subadmin' && membership.role !== 'admin' && testIds.length > 0) {
+            const submitted = await query(`
+                SELECT DISTINCT test_id
+                FROM submissions
+                WHERE student_id = $1
+                  AND test_id = ANY($2::text[])
+            `, [user.id, testIds]);
+            submittedTestIds = new Set(submitted.rows.map((row) => row.test_id));
+        }
 
         sendJson(req, res, 200, {
-            tests: visibleTestRows.map((row) => mapTestRow(row, questionRows.filter((question) => question.test_id === row.id), membership.role)),
+            tests: visibleTestRows.map((row) => mapTestRow(
+                row,
+                questionRows.filter((question) => question.test_id === row.id),
+                membership.role,
+                { revealAnswers: Boolean(row.show_answers_after_exam) && submittedTestIds.has(row.id) },
+            )),
         });
         return;
     }
 
     if (req.method === 'GET' && pathname === '/api/student/tests') {
+        await ensureNegativeMarkingColumns();
         const { user } = await requireAuth(req);
 
         const testRows = await query(`
@@ -1516,9 +1604,24 @@ export const handleRequest = async (req, res) => {
         const visibleTestRows = testRows.rows.filter((row) => testAllowsEmail(row, user.email));
         const testIds = visibleTestRows.map((row) => row.id);
         const questionRows = await fetchQuestionsByTestIds(testIds);
+        let submittedTestIds = new Set();
+        if (testIds.length > 0) {
+            const submitted = await query(`
+                SELECT DISTINCT test_id
+                FROM submissions
+                WHERE student_id = $1
+                  AND test_id = ANY($2::text[])
+            `, [user.id, testIds]);
+            submittedTestIds = new Set(submitted.rows.map((row) => row.test_id));
+        }
 
         sendJson(req, res, 200, {
-            tests: visibleTestRows.map((row) => mapTestRow(row, questionRows.filter((question) => question.test_id === row.id), 'student')),
+            tests: visibleTestRows.map((row) => mapTestRow(
+                row,
+                questionRows.filter((question) => question.test_id === row.id),
+                'student',
+                { revealAnswers: Boolean(row.show_answers_after_exam) && submittedTestIds.has(row.id) },
+            )),
         });
         return;
     }
@@ -1746,6 +1849,7 @@ export const handleRequest = async (req, res) => {
     }
 
     if (req.method === 'POST' && pathname === '/api/tests') {
+        await ensureNegativeMarkingColumns();
         const { user } = await requireAuth(req);
         const orgId = String(body.orgId || '');
         await requireSubAdmin(user.id, orgId);
@@ -1762,6 +1866,9 @@ export const handleRequest = async (req, res) => {
         if (!endAt) throw new HttpError(400, 'Exam end date and time is required.');
         const difficulty = '';
         const tags = Array.isArray(body.tags) ? body.tags : [];
+        const negativeMarkingEnabled = Boolean(body.negativeMarkingEnabled ?? body.negative_marking_enabled);
+        const negativeMarkValue = parseNegativeMarkValue(body.negativeMarkValue ?? body.negative_mark_value);
+        const showAnswersAfterExam = Boolean(body.showAnswersAfterExam ?? body.show_answers_after_exam);
         const allowedEmails = normalizeAllowedEmails(body.allowedEmails ?? body.allowed_emails);
         const securitySettings = normalizeTestSecuritySettings(body.securitySettings ?? body.security_settings);
         const accessCode = await transaction(async (client) => uniqueTestAccessCode(client));
@@ -1770,9 +1877,10 @@ export const handleRequest = async (req, res) => {
             const result = await client.query(`
                 INSERT INTO tests (
                     id, org_id, title, description, duration, difficulty, tags, published,
+                    negative_marking_enabled, negative_mark_value, show_answers_after_exam,
                     allowed_emails, access_code, access_code_hash, security_settings, start_at, end_at, created_by, created_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, FALSE, $8::jsonb, $9, $10::jsonb, $11, $12, $13, $14)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, FALSE, $8, $9, $10, $11::jsonb, $12, $13, $14::jsonb, $15, $16, $17, $18)
                 RETURNING *
             `, [
                 testId,
@@ -1782,6 +1890,9 @@ export const handleRequest = async (req, res) => {
                 duration,
                 difficulty,
                 JSON.stringify(tags),
+                negativeMarkingEnabled,
+                negativeMarkValue,
+                showAnswersAfterExam,
                 JSON.stringify(allowedEmails),
                 accessCode,
                 null,
@@ -1804,6 +1915,9 @@ export const handleRequest = async (req, res) => {
                     startAt,
                     endAt,
                     tags,
+                    negativeMarkingEnabled,
+                    negativeMarkValue,
+                    showAnswersAfterExam,
                     allowedEmailCount: allowedEmails.length,
                     securitySettings,
                     hasAccessCode: Boolean(accessCode),
@@ -1820,6 +1934,7 @@ export const handleRequest = async (req, res) => {
 
     match = pathname.match(/^\/api\/tests\/([^/]+)$/);
     if (match) {
+        await ensureNegativeMarkingColumns();
         const { user } = await requireAuth(req);
         const testId = decodeURIComponent(match[1]);
         const test = await getTestOrThrow(testId);
@@ -1837,6 +1952,18 @@ export const handleRequest = async (req, res) => {
             const securitySettings = securitySettingsProvided
                 ? normalizeTestSecuritySettings(body.securitySettings ?? body.security_settings)
                 : normalizeTestSecuritySettings(test.security_settings);
+            const negativeMarkingProvided = body.negativeMarkingEnabled !== undefined || body.negative_marking_enabled !== undefined;
+            const negativeMarkValueProvided = body.negativeMarkValue !== undefined || body.negative_mark_value !== undefined;
+            const negativeMarkingEnabled = negativeMarkingProvided
+                ? Boolean(body.negativeMarkingEnabled ?? body.negative_marking_enabled)
+                : null;
+            const negativeMarkValue = negativeMarkValueProvided
+                ? parseNegativeMarkValue(body.negativeMarkValue ?? body.negative_mark_value)
+                : null;
+            const showAnswersProvided = body.showAnswersAfterExam !== undefined || body.show_answers_after_exam !== undefined;
+            const showAnswersAfterExam = showAnswersProvided
+                ? Boolean(body.showAnswersAfterExam ?? body.show_answers_after_exam)
+                : null;
             const shouldEnsureAccessCode = body.published === true && !test.access_code;
             const startAtProvided = body.startAt !== undefined || body.start_at !== undefined;
             const endAtProvided = body.endAt !== undefined || body.end_at !== undefined;
@@ -1878,8 +2005,11 @@ export const handleRequest = async (req, res) => {
                         access_code = COALESCE($7, access_code),
                         start_at = COALESCE($8, start_at),
                         end_at = COALESCE($9, end_at),
-                        security_settings = COALESCE($10::jsonb, security_settings)
-                    WHERE id = $11
+                        security_settings = COALESCE($10::jsonb, security_settings),
+                        negative_marking_enabled = COALESCE($11::boolean, negative_marking_enabled),
+                        negative_mark_value = COALESCE($12::numeric, negative_mark_value),
+                        show_answers_after_exam = COALESCE($13::boolean, show_answers_after_exam)
+                    WHERE id = $14
                     RETURNING *
                 `, [
                     body.title !== undefined ? String(body.title).trim() : null,
@@ -1892,6 +2022,9 @@ export const handleRequest = async (req, res) => {
                     startAt,
                     endAt,
                     securitySettingsProvided ? JSON.stringify(securitySettings) : null,
+                    negativeMarkingEnabled,
+                    negativeMarkValue,
+                    showAnswersAfterExam,
                     testId,
                 ]);
 
@@ -1914,6 +2047,9 @@ export const handleRequest = async (req, res) => {
                         duration: nextTest.duration,
                         startAt: nextTest.start_at,
                         endAt: nextTest.end_at,
+                        negativeMarkingEnabled: nextTest.negative_marking_enabled,
+                        negativeMarkValue: nextTest.negative_mark_value,
+                        showAnswersAfterExam: nextTest.show_answers_after_exam,
                         securitySettings: normalizeTestSecuritySettings(nextTest.security_settings),
                         allowedEmailCount: normalizeAllowedEmails(nextTest.allowed_emails).length,
                         hasAccessCode: Boolean(nextTest.access_code),
@@ -2364,6 +2500,7 @@ export const handleRequest = async (req, res) => {
     }
 
     if (req.method === 'POST' && pathname === '/api/submissions') {
+        await ensureNegativeMarkingColumns();
         enforceRateLimit(req, 'submission-create', { limit: 20, windowMs: 5 * 60 * 1000 });
         const { user } = await requireAuth(req);
         const testId = String(body.test_id || '');
@@ -2391,7 +2528,14 @@ export const handleRequest = async (req, res) => {
         await assertNoSubmittedAttempt(testId, user.id);
 
         const questionResult = await query('SELECT * FROM questions WHERE test_id = $1 ORDER BY position ASC', [testId]);
-        const { answers, score, totalPoints } = await buildSubmissionAnswers(questionResult.rows.map(mapQuestionRow), body.answers);
+        const { answers, score, totalPoints } = await buildSubmissionAnswers(
+            questionResult.rows.map(mapQuestionRow),
+            body.answers,
+            {
+                enabled: test.negative_marking_enabled,
+                value: test.negative_mark_value,
+            },
+        );
         const integrityEvents = mergeIntegrityEvents(attempt.integrity_events, body.integrity_events);
         const violationsCount = integrityEvents.length;
         const integrityScore = Math.max(0, 100 - Math.min(violationsCount, 20) * 5);

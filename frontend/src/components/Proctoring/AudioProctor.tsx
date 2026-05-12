@@ -243,7 +243,7 @@ const AudioProctor: React.FC<AudioProctorProps> = ({ onViolation, onNoiseViolati
         : 'var(--text)';
 
     return (
-        <div style={{
+        <div className="audio-proctor" style={{
             position: 'fixed',
             bottom: '1.5rem',
             right: '14.5rem',
@@ -303,6 +303,30 @@ const AudioProctor: React.FC<AudioProctorProps> = ({ onViolation, onNoiseViolati
                     </span>
                 </div>
             </div>
+            <style>{`
+                @media (max-width: 900px) {
+                    .audio-proctor {
+                        width: 132px !important;
+                        right: 0.75rem !important;
+                        bottom: 7.25rem !important;
+                        border-radius: 10px !important;
+                    }
+                    .audio-proctor > div:first-child {
+                        padding: 0.65rem !important;
+                        gap: 0.5rem !important;
+                    }
+                    .audio-proctor > div:first-child > div:first-child {
+                        width: 28px !important;
+                        height: 28px !important;
+                    }
+                    .audio-proctor p {
+                        font-size: 9px !important;
+                    }
+                    .audio-proctor > div:last-of-type {
+                        padding: 0 0.65rem 0.65rem !important;
+                    }
+                }
+            `}</style>
         </div>
     );
 };

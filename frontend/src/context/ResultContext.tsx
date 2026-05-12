@@ -11,6 +11,7 @@ export interface AnswerPayload {
     language?: string;
     response?: string;
     pointsEarned: number;
+    negativeMarkApplied?: boolean;
 }
 
 export interface IntegrityEvent {

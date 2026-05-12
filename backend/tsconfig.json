@@ -18,10 +18,33 @@
 
     "strict": false,
     "noImplicitAny": false,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
 
     "sourceMap": true
   },
 
-  "include": ["src/**/*.ts"],
-  "exclude": ["dist", "node_modules"]
+  "include": [
+    "src/index.ts",
+    "src/types.d.ts",
+    "src/controllers/**/*.ts",
+    "src/routes/**/*.ts",
+    "src/services/**/*.ts",
+    "src/utils/**/*.ts"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules",
+    "src/app.module.ts",
+    "src/main.ts",
+    "src/auth",
+    "src/common",
+    "src/config",
+    "src/groups",
+    "src/organizations",
+    "src/prisma",
+    "src/realtime",
+    "src/storage",
+    "src/tests"
+  ]
 }

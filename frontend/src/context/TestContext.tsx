@@ -28,6 +28,9 @@ export interface Test {
     duration: number;
     tags: string[];
     published: boolean;
+    negativeMarkingEnabled: boolean;
+    negativeMarkValue: number;
+    showAnswersAfterExam: boolean;
     allowedEmails: string[];
     hasAccessCode: boolean;
     accessCode: string | null;
@@ -133,6 +136,9 @@ const rowToTest = (row: any): Test => ({
     duration: row.duration,
     tags: row.tags ?? [],
     published: row.published,
+    negativeMarkingEnabled: Boolean(row.negative_marking_enabled ?? row.negativeMarkingEnabled),
+    negativeMarkValue: Number(row.negative_mark_value ?? row.negativeMarkValue ?? 0),
+    showAnswersAfterExam: Boolean(row.show_answers_after_exam ?? row.showAnswersAfterExam),
     allowedEmails: row.allowed_emails ?? row.allowedEmails ?? [],
     hasAccessCode: Boolean(row.has_access_code ?? row.hasAccessCode ?? row.access_code),
     accessCode: row.access_code ?? row.accessCode ?? null,
@@ -230,6 +236,9 @@ export const TestProvider: React.FC<{ children: React.ReactNode }> = ({ children
             duration: rest.duration,
             tags: rest.tags,
             published: rest.published,
+            negativeMarkingEnabled: rest.negativeMarkingEnabled,
+            negativeMarkValue: rest.negativeMarkValue,
+            showAnswersAfterExam: rest.showAnswersAfterExam,
             startAt: rest.startAt,
             endAt: rest.endAt,
             securitySettings: rest.securitySettings
@@ -243,6 +252,12 @@ export const TestProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 : undefined,
         };
 
+        let previousTests: Test[] = [];
+        setTests(prev => {
+            previousTests = prev;
+            return prev.map(test => (test.id === id ? { ...test, ...rest } : test));
+        });
+
         try {
             const result = await apiRequest<TestResponse>(`/tests/${id}`, {
                 method: 'PATCH',
@@ -250,8 +265,9 @@ export const TestProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
             const updated = rowToTest(result.test);
             setTests(prev => prev.map(test => (test.id === id ? updated : test)));
-        } catch {
-            // Keep local state untouched on failure.
+        } catch (error) {
+            setTests(previousTests);
+            throw error;
         }
     }, []);
 
