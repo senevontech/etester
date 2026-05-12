@@ -23,7 +23,6 @@ Etester/
       services/
       utils/
       index.ts
-      seed.ts
     package.json
     tsconfig.json
     .env
@@ -89,11 +88,15 @@ Start the Vite frontend:
 cmd /c npm run dev:frontend
 ```
 
-Seed the first superadmin account:
+The backend can sync the superadmin account from environment variables at startup:
 
-```powershell
-cmd /c npm run seed
+```text
+SUPERADMIN_EMAIL=owner@example.com
+SUPERADMIN_PASSWORD=your-secure-password
+SUPERADMIN_NAME=Super Admin
 ```
+
+When these values are set, the backend creates or updates that account as a superadmin. The password is never printed in logs.
 
 Check backend TypeScript:
 

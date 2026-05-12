@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID, pbkdf2Sync, timingSafeEqual } from 'node:crypto';
 import { query, transaction } from '../services/db.ts';
 import { executeSnippet, getExecutionProvider } from '../services/codeExecution.ts';
+import { syncSuperadminFromEnv } from '../services/superadmin.ts';
 
 const PORT = Number(process.env.PORT || 3001);
 export const NODE_ENV = process.env.NODE_ENV || 'development';
@@ -932,6 +933,13 @@ export const handleRequest = async (req, res) => {
         enforceRateLimit(req, 'auth-login', { limit: 10, windowMs: 15 * 60 * 1000 });
         const email = String(body.email || '').trim().toLowerCase();
         const password = String(body.password || '');
+        const superadminEnvEmail = String(process.env.SUPERADMIN_EMAIL || '').trim().toLowerCase();
+
+        // Self-heal superadmin credentials from environment before verifying login.
+        if (superadminEnvEmail && email === superadminEnvEmail) {
+            await syncSuperadminFromEnv();
+        }
+
         const { rows } = await query('SELECT id, name, email, password_hash, global_role FROM users WHERE email = $1 LIMIT 1', [email]);
         const user = rows[0];
 

@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { closeDb, initDb } from './services/db.ts';
 import { getExecutionProvider } from './services/codeExecution.ts';
+import { syncSuperadminFromEnv } from './services/superadmin.ts';
 import {
     ALLOWED_ORIGINS,
     EFFECTIVE_ALLOWED_ORIGINS,
@@ -13,6 +14,7 @@ import { routeRequest } from './routes/apiRoutes.ts';
 const PORT = Number(process.env.PORT || 3001);
 
 await initDb();
+await syncSuperadminFromEnv();
 
 const server = createServer(async (req, res) => {
     try {
