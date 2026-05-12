@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import '../utils/env.ts';
 
 const databaseUrl = process.env.DATABASE_URL;
+const DEFAULT_SECURITY_SETTINGS_JSON = '{"webcam":true,"microphone":true,"tab_switch":true,"fullscreen":true,"laptop_only":false}';
 
 if (!databaseUrl) {
     throw new Error('Missing DATABASE_URL. Add it to .env before starting the server.');
@@ -158,6 +159,7 @@ export const initDb = async () => {
             allowed_emails JSONB NOT NULL DEFAULT '[]'::jsonb,
             access_code TEXT,
             access_code_hash TEXT,
+            security_settings JSONB NOT NULL DEFAULT '{"webcam":true,"microphone":true,"tab_switch":true,"fullscreen":true,"laptop_only":false}'::jsonb,
             start_at TIMESTAMPTZ,
             end_at TIMESTAMPTZ,
             created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -204,6 +206,27 @@ export const initDb = async () => {
     await query(`
         ALTER TABLE tests
         ADD COLUMN IF NOT EXISTS end_at TIMESTAMPTZ;
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ADD COLUMN IF NOT EXISTS security_settings JSONB;
+    `);
+
+    await query(`
+        UPDATE tests
+        SET security_settings = $1::jsonb
+        WHERE security_settings IS NULL;
+    `, [DEFAULT_SECURITY_SETTINGS_JSON]);
+
+    await query(`
+        ALTER TABLE tests
+        ALTER COLUMN security_settings SET DEFAULT '{"webcam":true,"microphone":true,"tab_switch":true,"fullscreen":true,"laptop_only":false}'::jsonb;
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ALTER COLUMN security_settings SET NOT NULL;
     `);
 
     await query(`

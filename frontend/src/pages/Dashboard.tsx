@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Navbar from '../components/Layout/Navbar';
 import TestCard from '../components/Cards/TestCard';
 import { Search, ShieldCheck, BarChart2, Award, Shield } from 'lucide-react';
@@ -34,17 +34,54 @@ const Dashboard: React.FC = () => {
     ];
 
     const now = new Date();
+    const nowMs = now.getTime();
     const published = tests.filter((t) => t.published);
+    const endedNotSubmittedTests = published.filter((t) => {
+        if (completedTestIds.has(t.id) || !t.endAt) return false;
+        const endMs = new Date(t.endAt).getTime();
+        return !Number.isNaN(endMs) && endMs < nowMs;
+    });
+    const endedNotSubmittedIds = new Set(endedNotSubmittedTests.map((t) => t.id));
 
     const activeTests = published.filter((t) => {
         if (completedTestIds.has(t.id)) return false;
-        if (!t.startAt || !t.endAt) return true;
-        const startAt = new Date(t.startAt);
-        const endAt = new Date(t.endAt);
-        return startAt <= now && now <= endAt;
+        if (t.startAt) {
+            const startMs = new Date(t.startAt).getTime();
+            if (!Number.isNaN(startMs) && startMs > nowMs) return false;
+        }
+        if (t.endAt) {
+            const endMs = new Date(t.endAt).getTime();
+            if (!Number.isNaN(endMs) && endMs < nowMs) return false;
+        }
+        return true;
     });
-    const upcomingTests = published.filter((t) => !completedTestIds.has(t.id) && t.startAt && new Date(t.startAt) > now);
-    const completedTests = published.filter((t) => completedTestIds.has(t.id));
+    const upcomingTests = published.filter((t) => {
+        if (completedTestIds.has(t.id) || !t.startAt) return false;
+        const startMs = new Date(t.startAt).getTime();
+        return !Number.isNaN(startMs) && startMs > nowMs;
+    });
+    const completedTests = published.filter((t) => completedTestIds.has(t.id) || endedNotSubmittedIds.has(t.id));
+
+    useEffect(() => {
+        const currentTabCount = activeTab === 'Active'
+            ? activeTests.length
+            : activeTab === 'Upcoming'
+                ? upcomingTests.length
+                : completedTests.length;
+
+        if (currentTabCount > 0) return;
+        if (activeTests.length > 0) {
+            setActiveTab('Active');
+            return;
+        }
+        if (upcomingTests.length > 0) {
+            setActiveTab('Upcoming');
+            return;
+        }
+        if (completedTests.length > 0) {
+            setActiveTab('Completed');
+        }
+    }, [activeTab, activeTests.length, upcomingTests.length, completedTests.length]);
 
     const getVisibleTests = () => {
         let list = activeTests;

@@ -4,6 +4,22 @@ import { useOrg } from './OrgContext';
 import { useAuth } from './AuthContext';
 import type { CodeQuestion, NumericQuestion, Question, TextQuestion } from '../types';
 
+export interface TestSecuritySettings {
+    webcam: boolean;
+    microphone: boolean;
+    tabSwitch: boolean;
+    fullscreen: boolean;
+    laptopOnly: boolean;
+}
+
+const DEFAULT_SECURITY_SETTINGS: TestSecuritySettings = {
+    webcam: true,
+    microphone: true,
+    tabSwitch: true,
+    fullscreen: true,
+    laptopOnly: false,
+};
+
 export interface Test {
     id: string;
     orgId: string;
@@ -17,6 +33,7 @@ export interface Test {
     accessCode: string | null;
     startAt: string | null;
     endAt: string | null;
+    securitySettings: TestSecuritySettings;
     createdBy: string;
     createdAt: string;
     questions: Question[];
@@ -26,7 +43,7 @@ interface TestContextValue {
     tests: Test[];
     loading: boolean;
     getTest: (id: string) => Test | undefined;
-    createTest: (data: Omit<Test, 'id' | 'createdAt' | 'questions' | 'published' | 'allowedEmails' | 'hasAccessCode' | 'accessCode' | 'created_by' | 'org_id'>) => Promise<Test | null>;
+    createTest: (data: Omit<Test, 'id' | 'createdAt' | 'questions' | 'published' | 'allowedEmails' | 'hasAccessCode' | 'accessCode' | 'securitySettings' | 'created_by' | 'org_id'>) => Promise<Test | null>;
     updateTest: (id: string, data: Partial<Omit<Test, 'id' | 'createdAt' | 'questions' | 'allowedEmails' | 'hasAccessCode' | 'accessCode' | 'org_id'>>) => Promise<void>;
     deleteTest: (id: string) => Promise<void>;
     publishTest: (id: string, options?: { allowedEmails: string[] }) => Promise<void>;
@@ -100,6 +117,14 @@ const rowToQuestion = (q: any): Question => {
     } satisfies CodeQuestion;
 };
 
+const rowToSecuritySettings = (raw: any): TestSecuritySettings => ({
+    webcam: raw?.webcam !== undefined ? Boolean(raw.webcam) : DEFAULT_SECURITY_SETTINGS.webcam,
+    microphone: raw?.microphone !== undefined ? Boolean(raw.microphone) : DEFAULT_SECURITY_SETTINGS.microphone,
+    tabSwitch: raw?.tab_switch !== undefined ? Boolean(raw.tab_switch) : raw?.tabSwitch !== undefined ? Boolean(raw.tabSwitch) : DEFAULT_SECURITY_SETTINGS.tabSwitch,
+    fullscreen: raw?.fullscreen !== undefined ? Boolean(raw.fullscreen) : DEFAULT_SECURITY_SETTINGS.fullscreen,
+    laptopOnly: raw?.laptop_only !== undefined ? Boolean(raw.laptop_only) : raw?.laptopOnly !== undefined ? Boolean(raw.laptopOnly) : DEFAULT_SECURITY_SETTINGS.laptopOnly,
+});
+
 const rowToTest = (row: any): Test => ({
     id: row.id,
     orgId: row.org_id,
@@ -113,6 +138,7 @@ const rowToTest = (row: any): Test => ({
     accessCode: row.access_code ?? row.accessCode ?? null,
     startAt: row.start_at,
     endAt: row.end_at,
+    securitySettings: rowToSecuritySettings(row.security_settings ?? row.securitySettings),
     createdBy: row.created_by ?? '',
     createdAt: row.created_at,
     questions: (row.questions ?? []).slice().sort((a: any, b: any) => a.position - b.position).map(rowToQuestion),
@@ -179,7 +205,7 @@ export const TestProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const getTest = useCallback((id: string) => tests.find(test => test.id === id), [tests]);
 
     const createTest = useCallback(async (
-        data: Omit<Test, 'id' | 'createdAt' | 'questions' | 'published' | 'allowedEmails' | 'hasAccessCode' | 'accessCode' | 'created_by' | 'org_id'>
+        data: Omit<Test, 'id' | 'createdAt' | 'questions' | 'published' | 'allowedEmails' | 'hasAccessCode' | 'accessCode' | 'securitySettings' | 'created_by' | 'org_id'>
     ): Promise<Test | null> => {
         if (!activeOrgId || !userId) return null;
 
@@ -206,6 +232,15 @@ export const TestProvider: React.FC<{ children: React.ReactNode }> = ({ children
             published: rest.published,
             startAt: rest.startAt,
             endAt: rest.endAt,
+            securitySettings: rest.securitySettings
+                ? {
+                    webcam: rest.securitySettings.webcam,
+                    microphone: rest.securitySettings.microphone,
+                    tab_switch: rest.securitySettings.tabSwitch,
+                    fullscreen: rest.securitySettings.fullscreen,
+                    laptop_only: rest.securitySettings.laptopOnly,
+                }
+                : undefined,
         };
 
         try {

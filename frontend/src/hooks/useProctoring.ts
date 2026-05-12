@@ -20,7 +20,18 @@ export interface UseProctoringReturn {
     clearViolations: () => void;
 }
 
-export const useProctoring = (isActive = true): UseProctoringReturn => {
+export interface ProctoringOptions {
+    tabSwitch?: boolean;
+    fullscreen?: boolean;
+}
+
+const DEFAULT_OPTIONS: Required<ProctoringOptions> = {
+    tabSwitch: true,
+    fullscreen: true,
+};
+
+export const useProctoring = (isActive = true, options: ProctoringOptions = {}): UseProctoringReturn => {
+    const resolvedOptions = { ...DEFAULT_OPTIONS, ...options };
     const [violations, setViolations] = useState<Violation[]>([]);
     const [isTabFocused, setIsTabFocused] = useState<boolean>(true);
     const [isFullscreen, setIsFullscreen] = useState<boolean>(!!document.fullscreenElement);
@@ -47,30 +58,30 @@ export const useProctoring = (isActive = true): UseProctoringReturn => {
     const handleVisibilityChange = useCallback(() => {
         const hidden = document.visibilityState === 'hidden';
         setIsTabFocused(!hidden);
-        if (hidden && isActive) {
+        if (hidden && isActive && resolvedOptions.tabSwitch) {
             addViolation('TAB_SWITCH', 'Candidate switched tabs or minimised the browser.');
             setTabSwitchCount((prev) => prev + 1);
         }
-    }, [isActive, addViolation]);
+    }, [isActive, addViolation, resolvedOptions.tabSwitch]);
 
     const handleFocusChange = useCallback(() => {
-        if (!document.hasFocus() && isActive) addViolation('WINDOW_FOCUS_LOST', 'Test window lost focus.');
-    }, [isActive, addViolation]);
+        if (!document.hasFocus() && isActive && resolvedOptions.tabSwitch) addViolation('WINDOW_FOCUS_LOST', 'Test window lost focus.');
+    }, [isActive, addViolation, resolvedOptions.tabSwitch]);
 
     const handleCopyPaste = useCallback((e: Event) => {
-        if (isActive) { e.preventDefault(); addViolation('CLIPBOARD_ACCESS', 'Copy/Paste is not allowed during a test.'); }
-    }, [isActive, addViolation]);
+        if (isActive && resolvedOptions.tabSwitch) { e.preventDefault(); addViolation('CLIPBOARD_ACCESS', 'Copy/Paste is not allowed during a test.'); }
+    }, [isActive, addViolation, resolvedOptions.tabSwitch]);
 
-    const blockContextMenu = useCallback((e: Event) => { if (isActive) e.preventDefault(); }, [isActive]);
+    const blockContextMenu = useCallback((e: Event) => { if (isActive && resolvedOptions.tabSwitch) e.preventDefault(); }, [isActive, resolvedOptions.tabSwitch]);
 
     const handleFullscreenChange = useCallback(() => {
         const inFullscreen = !!document.fullscreenElement;
         setIsFullscreen(inFullscreen);
-        if (!inFullscreen && isActive) {
+        if (!inFullscreen && isActive && resolvedOptions.fullscreen) {
             addViolation('FULLSCREEN_EXIT', 'Candidate exited fullscreen mode.');
             setFullscreenExitCount((prev) => prev + 1);
         }
-    }, [isActive, addViolation]);
+    }, [isActive, addViolation, resolvedOptions.fullscreen]);
 
     useEffect(() => {
         if (!isActive) return;

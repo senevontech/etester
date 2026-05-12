@@ -15,6 +15,19 @@ import { CodeQuestion, AnswerPayload, IntegrityEvent, QUESTION_CATEGORY_LABELS }
 import { executeCode } from '../utils/piston';
 import { apiRequest, ApiError } from '../lib/api';
 
+const DEFAULT_SECURITY_SETTINGS = {
+    webcam: true,
+    microphone: true,
+    tabSwitch: true,
+    fullscreen: true,
+    laptopOnly: false,
+};
+
+const isMobileLikeDevice = () => {
+    const userAgent = navigator.userAgent.toLowerCase();
+    return /android|iphone|ipad|ipod|mobile|windows phone|opera mini|silk\//.test(userAgent);
+};
+
 interface TerminalLog {
     type: 'info' | 'success' | 'error';
     text: string;
@@ -46,7 +59,12 @@ const TestRoom: React.FC = () => {
     const { submitTest } = useResults();
 
     const test = getTest(testId ?? '');
-    const { violations, isFullscreen, tabSwitchCount, fullscreenExitCount, enterFullscreen } = useProctoring(true);
+    const security = test?.securitySettings ?? DEFAULT_SECURITY_SETTINGS;
+    const blockedByDevicePolicy = security.laptopOnly && isMobileLikeDevice();
+    const { violations, isFullscreen, tabSwitchCount, fullscreenExitCount, enterFullscreen } = useProctoring(true, {
+        tabSwitch: security.tabSwitch,
+        fullscreen: security.fullscreen,
+    });
 
     const [idx, setIdx] = useState(0);
     const [timeLeft, setTimeLeft] = useState<number | null>(null);
@@ -75,8 +93,12 @@ const TestRoom: React.FC = () => {
 
     // Enter fullscreen → unlock the test gate
     useEffect(() => {
+        if (!security.fullscreen && !fullscreenReady) {
+            setFullscreenReady(true);
+            return;
+        }
         if (isFullscreen && !fullscreenReady) setFullscreenReady(true);
-    }, [isFullscreen, fullscreenReady]);
+    }, [isFullscreen, fullscreenReady, security.fullscreen]);
 
     useEffect(() => {
         if (q && q.type === 'code') {
@@ -86,6 +108,7 @@ const TestRoom: React.FC = () => {
 
     useEffect(() => {
         if (!test || !user) return;
+        if (blockedByDevicePolicy) return;
 
         let cancelled = false;
         setAttemptLoading(true);
@@ -132,7 +155,7 @@ const TestRoom: React.FC = () => {
         return () => {
             cancelled = true;
         };
-    }, [test?.id, user?.id]);
+    }, [test?.id, user?.id, blockedByDevicePolicy]);
 
     // Sync violations to backend when they occur
     useEffect(() => {
@@ -402,6 +425,7 @@ const TestRoom: React.FC = () => {
 
     // Fullscreen exit enforcement — 2 warnings, 3rd exit auto-submits
     useEffect(() => {
+        if (!security.fullscreen) return;
         if (fullscreenExitCount === 0) return;
         void logViolation('fullscreen_exit', { count: fullscreenExitCount });
         if (fullscreenExitCount === 1) {
@@ -412,15 +436,17 @@ const TestRoom: React.FC = () => {
             setFsWarningLevel(0);
             setAutoSubmitReason('Exited fullscreen mode 3 times.');
         }
-    }, [fullscreenExitCount, logViolation]);
+    }, [fullscreenExitCount, logViolation, security.fullscreen]);
 
     // Clear fullscreen warning when candidate re-enters fullscreen
     useEffect(() => {
+        if (!security.fullscreen) return;
         if (isFullscreen) setFsWarningLevel(0);
-    }, [isFullscreen]);
+    }, [isFullscreen, security.fullscreen]);
 
     // Tab-switch enforcement
     useEffect(() => {
+        if (!security.tabSwitch) return;
         if (tabSwitchCount === 0) return;
         
         void logViolation('tab_switch', { count: tabSwitchCount });
@@ -437,10 +463,11 @@ const TestRoom: React.FC = () => {
         }
         setTabWarningLevel(0);
         setAutoSubmitReason('Switched tabs or left the exam window 3 times.');
-    }, [tabSwitchCount, logViolation]);
+    }, [tabSwitchCount, logViolation, security.tabSwitch]);
 
     // Multiple-face enforcement
     const handleFaceViolation = React.useCallback((warningNumber: number) => {
+        if (!security.webcam) return;
         void logViolation('multiple_faces', { warningNumber });
         if (warningNumber === 1) {
             setFaceWarningLevel(1);
@@ -454,9 +481,10 @@ const TestRoom: React.FC = () => {
         }
         setFaceWarningLevel(0);
         setAutoSubmitReason('Multiple faces detected 3 times.');
-    }, [logViolation]);
+    }, [logViolation, security.webcam]);
 
     const handleNoiseViolation = React.useCallback((warningNumber: number) => {
+        if (!security.microphone) return;
         void logViolation('loud_noise', { warningNumber });
         if (warningNumber === 1) {
             setNoiseWarningLevel(1);
@@ -470,12 +498,22 @@ const TestRoom: React.FC = () => {
         }
         setNoiseWarningLevel(0);
         setAutoSubmitReason('Repeated loud noise was detected 3 times.');
-    }, [logViolation]);
+    }, [logViolation, security.microphone]);
 
     if (!test || !user) return (
         <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', flexDirection: 'column', gap: '1rem' }}>
             <p className="t-h2">Assessment not found</p>
             <button className="btn btn-md btn-primary hover-glow" onClick={() => navigate('/')}>Back to Hub</button>
+        </div>
+    );
+
+    if (blockedByDevicePolicy) return (
+        <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
+            <p className="t-h2">Desktop or Laptop Required</p>
+            <p className="t-body" style={{ maxWidth: '420px', textAlign: 'center' }}>
+                This exam is configured to run only on laptop/desktop devices. Please open it from a computer browser.
+            </p>
+            <button className="btn btn-md btn-primary hover-glow" onClick={() => navigate('/dashboard')}>Back to Dashboard</button>
         </div>
     );
 
@@ -885,14 +923,18 @@ const TestRoom: React.FC = () => {
                     </div>
                 )}
 
-                <WebcamProctor
-                    onViolation={handleCameraEvent}
-                    onFaceViolation={handleFaceViolation}
-                />
-                <AudioProctor
-                    onViolation={handleCameraEvent}
-                    onNoiseViolation={handleNoiseViolation}
-                />
+                {security.webcam && (
+                    <WebcamProctor
+                        onViolation={handleCameraEvent}
+                        onFaceViolation={handleFaceViolation}
+                    />
+                )}
+                {security.microphone && (
+                    <AudioProctor
+                        onViolation={handleCameraEvent}
+                        onNoiseViolation={handleNoiseViolation}
+                    />
+                )}
                 <ProctorOverlay violations={violations} />
             </main>
 

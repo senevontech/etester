@@ -25,6 +25,13 @@ const MAX_CODE_TEST_CASE_INPUT_BYTES = 4000;
 const MAX_CODE_TEST_CASE_OUTPUT_BYTES = 4000;
 const MAX_BULK_IMPORT_QUESTIONS = 200;
 const rateLimitStore = new Map();
+const DEFAULT_TEST_SECURITY_SETTINGS = {
+    webcam: true,
+    microphone: true,
+    tab_switch: true,
+    fullscreen: true,
+    laptop_only: false,
+};
 
 export class HttpError extends Error {
     status: number;
@@ -278,6 +285,28 @@ const normalizeAllowedEmails = (emails) => {
     return Array.from(unique);
 };
 
+const normalizeTestSecuritySettings = (value) => {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+
+    return {
+        webcam: source.webcam !== undefined ? Boolean(source.webcam) : DEFAULT_TEST_SECURITY_SETTINGS.webcam,
+        microphone: source.microphone !== undefined ? Boolean(source.microphone) : DEFAULT_TEST_SECURITY_SETTINGS.microphone,
+        tab_switch: source.tab_switch !== undefined ? Boolean(source.tab_switch) : source.tabSwitch !== undefined ? Boolean(source.tabSwitch) : DEFAULT_TEST_SECURITY_SETTINGS.tab_switch,
+        fullscreen: source.fullscreen !== undefined ? Boolean(source.fullscreen) : DEFAULT_TEST_SECURITY_SETTINGS.fullscreen,
+        laptop_only: source.laptop_only !== undefined ? Boolean(source.laptop_only) : source.laptopOnly !== undefined ? Boolean(source.laptopOnly) : DEFAULT_TEST_SECURITY_SETTINGS.laptop_only,
+    };
+};
+
+const getTestSecuritySettings = (test) => normalizeTestSecuritySettings(test.security_settings);
+
+const isMobileRequest = (req) => {
+    const secUaMobile = String(req.headers['sec-ch-ua-mobile'] || '').toLowerCase();
+    if (secUaMobile.includes('?1') || secUaMobile === '1' || secUaMobile === 'true') return true;
+
+    const userAgent = String(req.headers['user-agent'] || '').toLowerCase();
+    return /android|iphone|ipad|ipod|iemobile|mobile|windows phone|opera mini|blackberry|silk\//.test(userAgent);
+};
+
 const testAllowsEmail = (test, email) => {
     const allowedEmails = normalizeAllowedEmails(test.allowed_emails);
     if (allowedEmails.length === 0) return true;
@@ -401,6 +430,7 @@ const mapTestRow = (row, questions = [], role = 'subadmin') => ({
     ...row,
     tags: row.tags ?? [],
     allowed_emails: normalizeAllowedEmails(row.allowed_emails),
+    security_settings: normalizeTestSecuritySettings(row.security_settings),
     has_access_code: Boolean(row.access_code),
     access_code: role === 'student' ? undefined : (row.access_code ?? null),
     access_code_hash: undefined,
@@ -1543,6 +1573,10 @@ export const handleRequest = async (req, res) => {
         assertTestEmailAccess(test, user.email);
         assertTestAccessCode(test, body.accessCode);
         assertTestWindowOpen(test);
+        const securitySettings = getTestSecuritySettings(test);
+        if (securitySettings.laptop_only && isMobileRequest(req)) {
+            throw new HttpError(403, 'This exam can only be started on a laptop or desktop device.');
+        }
         await assertNoSubmittedAttempt(testId, user.id);
 
         const requestIp = getRequestIp(req);
@@ -1729,15 +1763,16 @@ export const handleRequest = async (req, res) => {
         const difficulty = '';
         const tags = Array.isArray(body.tags) ? body.tags : [];
         const allowedEmails = normalizeAllowedEmails(body.allowedEmails ?? body.allowed_emails);
+        const securitySettings = normalizeTestSecuritySettings(body.securitySettings ?? body.security_settings);
         const accessCode = await transaction(async (client) => uniqueTestAccessCode(client));
 
         const createdTest = await transaction(async (client) => {
             const result = await client.query(`
                 INSERT INTO tests (
                     id, org_id, title, description, duration, difficulty, tags, published,
-                    allowed_emails, access_code, access_code_hash, start_at, end_at, created_by, created_at
+                    allowed_emails, access_code, access_code_hash, security_settings, start_at, end_at, created_by, created_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, FALSE, $8::jsonb, $9, $10, $11, $12, $13, $14)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, FALSE, $8::jsonb, $9, $10::jsonb, $11, $12, $13, $14)
                 RETURNING *
             `, [
                 testId,
@@ -1750,6 +1785,7 @@ export const handleRequest = async (req, res) => {
                 JSON.stringify(allowedEmails),
                 accessCode,
                 null,
+                JSON.stringify(securitySettings),
                 startAt,
                 endAt,
                 user.id,
@@ -1769,6 +1805,7 @@ export const handleRequest = async (req, res) => {
                     endAt,
                     tags,
                     allowedEmailCount: allowedEmails.length,
+                    securitySettings,
                     hasAccessCode: Boolean(accessCode),
                 },
                 ipAddress: requestIp,
@@ -1788,11 +1825,18 @@ export const handleRequest = async (req, res) => {
         const test = await getTestOrThrow(testId);
 
         if (req.method === 'PATCH') {
-            await requireSubAdmin(user.id, test.org_id);
+            const membership = await requireMembership(user.id, test.org_id);
+            if (membership.role !== 'subadmin' && membership.role !== 'admin') {
+                throw new HttpError(403, 'Only admin/subadmin can update exam schedule in test editor.');
+            }
             const allowedEmailsProvided = body.allowedEmails !== undefined || body.allowed_emails !== undefined;
             const allowedEmails = allowedEmailsProvided
                 ? normalizeAllowedEmails(body.allowedEmails ?? body.allowed_emails)
                 : normalizeAllowedEmails(test.allowed_emails);
+            const securitySettingsProvided = body.securitySettings !== undefined || body.security_settings !== undefined;
+            const securitySettings = securitySettingsProvided
+                ? normalizeTestSecuritySettings(body.securitySettings ?? body.security_settings)
+                : normalizeTestSecuritySettings(test.security_settings);
             const shouldEnsureAccessCode = body.published === true && !test.access_code;
             const startAtProvided = body.startAt !== undefined || body.start_at !== undefined;
             const endAtProvided = body.endAt !== undefined || body.end_at !== undefined;
@@ -1833,8 +1877,9 @@ export const handleRequest = async (req, res) => {
                         allowed_emails = COALESCE($6::jsonb, allowed_emails),
                         access_code = COALESCE($7, access_code),
                         start_at = COALESCE($8, start_at),
-                        end_at = COALESCE($9, end_at)
-                    WHERE id = $10
+                        end_at = COALESCE($9, end_at),
+                        security_settings = COALESCE($10::jsonb, security_settings)
+                    WHERE id = $11
                     RETURNING *
                 `, [
                     body.title !== undefined ? String(body.title).trim() : null,
@@ -1846,6 +1891,7 @@ export const handleRequest = async (req, res) => {
                     nextAccessCode,
                     startAt,
                     endAt,
+                    securitySettingsProvided ? JSON.stringify(securitySettings) : null,
                     testId,
                 ]);
 
@@ -1868,6 +1914,7 @@ export const handleRequest = async (req, res) => {
                         duration: nextTest.duration,
                         startAt: nextTest.start_at,
                         endAt: nextTest.end_at,
+                        securitySettings: normalizeTestSecuritySettings(nextTest.security_settings),
                         allowedEmailCount: normalizeAllowedEmails(nextTest.allowed_emails).length,
                         hasAccessCode: Boolean(nextTest.access_code),
                     },
