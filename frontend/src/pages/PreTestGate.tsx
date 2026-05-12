@@ -14,6 +14,19 @@ import {
 import { useTests } from '../context/TestContext';
 import Navbar from '../components/Layout/Navbar';
 
+const DEFAULT_SECURITY_SETTINGS = {
+    webcam: true,
+    microphone: true,
+    tabSwitch: true,
+    fullscreen: true,
+    laptopOnly: false,
+};
+
+const isMobileLikeDevice = () => {
+    const userAgent = navigator.userAgent.toLowerCase();
+    return /android|iphone|ipad|ipod|mobile|windows phone|opera mini|silk\//.test(userAgent);
+};
+
 const PreTestGate: React.FC = () => {
     const { testId } = useParams<{ testId: string }>();
     const navigate = useNavigate();
@@ -29,43 +42,67 @@ const PreTestGate: React.FC = () => {
     const videoRef = useRef<HTMLVideoElement>(null);
 
     const test = tests.find(t => t.id === testId);
+    const security = test?.securitySettings ?? DEFAULT_SECURITY_SETTINGS;
+    const requiresExamCode = Boolean(test?.hasAccessCode || test?.accessCode);
+    const blockedByDevicePolicy = security.laptopOnly && isMobileLikeDevice();
 
     useEffect(() => {
+        if (!test) return;
+
         let stream: MediaStream | null = null;
+        let micStream: MediaStream | null = null;
 
         const checkHardware = async () => {
-            try {
-                if (!navigator.mediaDevices?.getUserMedia) {
-                    throw new Error('This browser does not support camera access.');
-                }
-                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            if (!security.webcam) {
                 setWebcamStatus('success');
-                setWebcamMessage('Camera is active.');
-                if (videoRef.current) videoRef.current.srcObject = stream;
-            } catch (err) {
-                setWebcamStatus('error');
-                const message = err instanceof Error ? err.message : 'Camera access was blocked.';
-                setWebcamMessage(message);
+                setWebcamMessage('Camera not required for this exam.');
+            } else {
+                try {
+                    if (!navigator.mediaDevices?.getUserMedia) {
+                        throw new Error('This browser does not support camera access.');
+                    }
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    setWebcamStatus('success');
+                    setWebcamMessage('Camera is active.');
+                    if (videoRef.current) videoRef.current.srcObject = stream;
+                } catch (err) {
+                    setWebcamStatus('error');
+                    const message = err instanceof Error ? err.message : 'Camera access was blocked.';
+                    setWebcamMessage(message);
+                }
             }
 
-            try {
-                const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            if (!security.microphone) {
                 setMicStatus('success');
-                audioStream.getTracks().forEach((track) => track.stop());
-            } catch (err) {
-                setMicStatus('error');
+            } else {
+                try {
+                    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    setMicStatus('success');
+                } catch {
+                    setMicStatus('error');
+                } finally {
+                    micStream?.getTracks().forEach((track) => track.stop());
+                }
             }
 
             // Simple internet check
             setInternetStatus(navigator.onLine ? 'success' : 'error');
             
             // Initial fullscreen check
-            setFsStatus(document.fullscreenElement ? 'success' : 'pending');
+            if (!security.fullscreen) {
+                setFsStatus('success');
+            } else {
+                setFsStatus(document.fullscreenElement ? 'success' : 'pending');
+            }
         };
 
         void checkHardware();
 
         const handleFsChange = () => {
+            if (!security.fullscreen) {
+                setFsStatus('success');
+                return;
+            }
             setFsStatus(document.fullscreenElement ? 'success' : 'pending');
         };
 
@@ -75,10 +112,17 @@ const PreTestGate: React.FC = () => {
             if (stream) {
                 stream.getTracks().forEach((track) => track.stop());
             }
+            if (micStream) {
+                micStream.getTracks().forEach((track) => track.stop());
+            }
         };
-    }, []);
+    }, [test, security.webcam, security.microphone, security.fullscreen]);
 
     const enterFullscreen = async () => {
+        if (!security.fullscreen) {
+            setFsStatus('success');
+            return;
+        }
         try {
             await document.documentElement.requestFullscreen();
             setFsStatus('success');
@@ -88,18 +132,26 @@ const PreTestGate: React.FC = () => {
     };
 
     const handleStart = () => {
-        if (webcamStatus !== 'success' || micStatus !== 'success' || fsStatus !== 'success' || !agreed || !examCode.trim() || !isExamOpen) return;
+        const checksPassed = (!security.webcam || webcamStatus === 'success')
+            && (!security.microphone || micStatus === 'success')
+            && (!security.fullscreen || fsStatus === 'success');
+        const hasExamCode = !requiresExamCode || Boolean(examCode.trim());
+
+        if (!checksPassed || !agreed || !hasExamCode || !isExamOpen || blockedByDevicePolicy) return;
         sessionStorage.setItem(`etester-exam-code:${testId}`, examCode.trim());
         sessionStorage.setItem(`etester-assignment-code:${testId}`, assignmentCode.trim());
         navigate(`/test/${testId}`);
     };
 
     const startWarning = useMemo(() => {
+        if (blockedByDevicePolicy) return 'This exam allows only laptop/desktop devices.';
         if (!agreed) return 'Accept the proctoring rules before starting.';
-        if (webcamStatus !== 'success') return `Camera check failed: ${webcamMessage}`;
-        if (fsStatus !== 'success') return 'Enable fullscreen to start the assessment.';
+        if (security.webcam && webcamStatus !== 'success') return `Camera check failed: ${webcamMessage}`;
+        if (security.microphone && micStatus !== 'success') return 'Enable microphone permission to start the assessment.';
+        if (security.fullscreen && fsStatus !== 'success') return 'Enable fullscreen to start the assessment.';
+        if (requiresExamCode && !examCode.trim()) return 'Enter the exam code to start.';
         return '';
-    }, [agreed, fsStatus, webcamMessage, webcamStatus]);
+    }, [agreed, blockedByDevicePolicy, security.webcam, security.microphone, security.fullscreen, fsStatus, webcamMessage, webcamStatus, micStatus, requiresExamCode, examCode]);
 
     if (!test) return null;
 
@@ -146,18 +198,36 @@ const PreTestGate: React.FC = () => {
                         <div className="card" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
                             <h3 className="t-h3" style={{ marginBottom: '1.25rem' }}>Rules & Instructions</h3>
                             <ul style={{ listStyle: 'none', padding: 0, display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                                <li style={{ display: 'flex', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                {security.webcam && (
+                                    <li style={{ display: 'flex', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
                                     <ShieldCheck size={18} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-                                    <span>This session is <strong>proctored</strong>. Webcam, microphone, and screen activity are monitored.</span>
-                                </li>
-                                <li style={{ display: 'flex', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                    <span>Webcam monitoring is enabled for this exam.</span>
+                                    </li>
+                                )}
+                                {security.microphone && (
+                                    <li style={{ display: 'flex', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                        <Mic size={18} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+                                        <span>Microphone monitoring is enabled for this exam.</span>
+                                    </li>
+                                )}
+                                {security.fullscreen && (
+                                    <li style={{ display: 'flex', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
                                     <Maximize size={18} style={{ color: 'var(--accent)', flexShrink: 0 }} />
                                     <span>Fullscreen is mandatory. Leaving fullscreen will flag your attempt.</span>
-                                </li>
-                                <li style={{ display: 'flex', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                    </li>
+                                )}
+                                {security.tabSwitch && (
+                                    <li style={{ display: 'flex', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
                                     <AlertCircle size={18} style={{ color: 'var(--accent)', flexShrink: 0 }} />
                                     <span>Do not switch tabs or use external resources. Multiple violations may lead to automatic failure.</span>
-                                </li>
+                                    </li>
+                                )}
+                                {security.laptopOnly && (
+                                    <li style={{ display: 'flex', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                        <Wifi size={18} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+                                        <span>This exam can be started only from a laptop or desktop browser.</span>
+                                    </li>
+                                )}
                             </ul>
                         </div>
 
@@ -187,9 +257,10 @@ const PreTestGate: React.FC = () => {
                             <input
                                 className="input"
                                 type="text"
-                                placeholder="Enter the exam code shared by your sub-admin"
+                                placeholder={requiresExamCode ? 'Enter the exam code shared by your sub-admin' : 'Exam code is not required for this test'}
                                 value={examCode}
                                 onChange={(e) => setExamCode(e.target.value)}
+                                disabled={!requiresExamCode}
                             />
                         </div>
                     </div>
@@ -201,19 +272,19 @@ const PreTestGate: React.FC = () => {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                                 {/* Webcam Check */}
                                 <div style={{ background: 'var(--bg)', borderRadius: '12px', overflow: 'hidden', border: '1px solid var(--border)', position: 'relative' }}>
-                                    {webcamStatus === 'success' ? (
+                                    {security.webcam && webcamStatus === 'success' ? (
                                         <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '180px', objectFit: 'cover' }} />
                                     ) : (
                                         <div style={{ height: '180px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: 'var(--text-muted)' }}>
                                             <Camera size={32} opacity={0.3} />
-                                            <p className="t-micro">Webcam Required</p>
+                                            <p className="t-micro">{security.webcam ? 'Webcam Required' : 'Webcam Optional'}</p>
                                         </div>
                                     )}
                                     <div style={{ position: 'absolute', bottom: '0.75rem', right: '0.75rem' }}>
-                                        {webcamStatus === 'success' ? <CheckCircle2 color="var(--success)" /> : <AlertCircle color="var(--danger)" />}
+                                        {webcamStatus === 'success' ? <CheckCircle2 color="var(--success)" /> : security.webcam ? <AlertCircle color="var(--danger)" /> : <CheckCircle2 color="var(--success)" />}
                                     </div>
                                 </div>
-                                {webcamStatus === 'error' && (
+                                {security.webcam && webcamStatus === 'error' && (
                                     <div style={{ padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--danger)', background: 'var(--danger-bg)', color: 'var(--danger)' }}>
                                         <p className="label" style={{ marginBottom: '0.25rem' }}>Camera Access Required</p>
                                         <p className="t-small">{webcamMessage} Allow camera permission in your browser, then refresh this page.</p>
@@ -226,7 +297,7 @@ const PreTestGate: React.FC = () => {
                                         <Maximize size={16} />
                                         <span className="t-small" style={{ fontWeight: 700 }}>Fullscreen</span>
                                     </div>
-                                    {fsStatus === 'success' ? (
+                                    {fsStatus === 'success' || !security.fullscreen ? (
                                         <CheckCircle2 size={18} color="var(--success)" />
                                     ) : (
                                         <button className="btn btn-sm btn-outline" onClick={enterFullscreen}>Enable</button>
@@ -238,7 +309,7 @@ const PreTestGate: React.FC = () => {
                                         <Mic size={16} />
                                         <span className="t-small" style={{ fontWeight: 700 }}>Microphone</span>
                                     </div>
-                                    <CheckCircle2 size={18} color={micStatus === 'success' ? 'var(--success)' : 'var(--danger)'} />
+                                    <CheckCircle2 size={18} color={micStatus === 'success' || !security.microphone ? 'var(--success)' : 'var(--danger)'} />
                                 </div>
 
                                 {/* Internet Check */}
@@ -252,10 +323,28 @@ const PreTestGate: React.FC = () => {
                             </div>
 
                             <button 
-                                className={`btn btn-lg btn-primary hover-glow ${(!agreed || webcamStatus !== 'success' || micStatus !== 'success' || fsStatus !== 'success' || !isExamOpen) ? 'disabled' : ''}`}
+                                className={`btn btn-lg btn-primary hover-glow ${
+                                    (
+                                        !agreed
+                                        || (security.webcam && webcamStatus !== 'success')
+                                        || (security.microphone && micStatus !== 'success')
+                                        || (security.fullscreen && fsStatus !== 'success')
+                                        || (requiresExamCode && !examCode.trim())
+                                        || !isExamOpen
+                                        || blockedByDevicePolicy
+                                    ) ? 'disabled' : ''
+                                }`}
                                 style={{ width: '100%', marginTop: '2rem', gap: '0.5rem' }}
                                 onClick={handleStart}
-                                disabled={!agreed || webcamStatus !== 'success' || micStatus !== 'success' || fsStatus !== 'success' || !examCode.trim() || !isExamOpen}
+                                disabled={
+                                    !agreed
+                                    || (security.webcam && webcamStatus !== 'success')
+                                    || (security.microphone && micStatus !== 'success')
+                                    || (security.fullscreen && fsStatus !== 'success')
+                                    || (requiresExamCode && !examCode.trim())
+                                    || !isExamOpen
+                                    || blockedByDevicePolicy
+                                }
                             >
                                 Start Assessment <ChevronRight size={18} />
                             </button>

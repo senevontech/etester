@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
+import { read, utils } from 'xlsx';
 import {
     ArrowLeft,
     Plus,
@@ -21,8 +22,13 @@ import {
     Pencil,
     House,
     Check,
+    Shield,
+    Camera,
+    Mic,
+    Monitor,
+    Laptop,
 } from 'lucide-react';
-import { useTests } from '../../context/TestContext';
+import { useTests, type TestSecuritySettings } from '../../context/TestContext';
 import { useOrg } from '../../context/OrgContext';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -45,6 +51,12 @@ interface PublishModalProps {
     test: { id: string; title: string; allowedEmails: string[]; accessCode: string | null };
     onClose: () => void;
     onPublish: (options: { allowedEmails: string[] }) => Promise<void>;
+}
+
+interface SecuritySettingsModalProps {
+    initial: TestSecuritySettings;
+    onClose: () => void;
+    onSave: (settings: TestSecuritySettings) => Promise<void>;
 }
 
 const toDateTimeLocalValue = (value?: string | null) => {
@@ -872,20 +884,110 @@ TestCases: hidden: 4 6 => 10`}</pre>
 };
 
 const PublishModal: React.FC<PublishModalProps> = ({ test, onClose, onPublish }) => {
-    const [emailsText, setEmailsText] = useState(test.allowedEmails.join('\n'));
+    const [candidates, setCandidates] = useState<Array<{ name: string; email: string }>>(
+        test.allowedEmails.length > 0
+            ? test.allowedEmails.map((email) => ({ name: '', email }))
+            : [{ name: '', email: '' }],
+    );
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const normalizeEmail = (value: string) => value.trim().toLowerCase();
+
+    const dedupeCandidates = (rows: Array<{ name: string; email: string }>) => {
+        const seen = new Set<string>();
+        const output: Array<{ name: string; email: string }> = [];
+
+        rows.forEach((row) => {
+            const email = normalizeEmail(row.email);
+            const name = row.name.trim();
+            if (!email || !email.includes('@') || seen.has(email)) return;
+            seen.add(email);
+            output.push({ name, email });
+        });
+
+        return output;
+    };
+
+    const parseCandidateFile = async (file: File) => {
+        const workbook = read(await file.arrayBuffer(), { type: 'array' });
+        const firstSheet = workbook.SheetNames[0];
+        if (!firstSheet) return [];
+
+        const rows = utils.sheet_to_json<any[]>(workbook.Sheets[firstSheet], { header: 1, defval: '' });
+        if (rows.length === 0) return [];
+
+        const normalizeHeader = (value: unknown) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const headerRow = rows[0] ?? [];
+        const headerKeys = headerRow.map(normalizeHeader);
+        const hasHeader = headerKeys.includes('email') || headerKeys.includes('mail');
+
+        const emailIndex = hasHeader
+            ? headerKeys.findIndex((key) => key === 'email' || key === 'mail')
+            : 1;
+        const nameIndex = hasHeader
+            ? headerKeys.findIndex((key) => key === 'name' || key === 'studentname' || key === 'fullname')
+            : 0;
+
+        const startAt = hasHeader ? 1 : 0;
+        const parsed: Array<{ name: string; email: string }> = [];
+
+        for (let i = startAt; i < rows.length; i += 1) {
+            const row = rows[i] ?? [];
+            const rawEmail = emailIndex >= 0 ? String(row[emailIndex] ?? '') : '';
+            const rawName = nameIndex >= 0 ? String(row[nameIndex] ?? '') : '';
+
+            const email = normalizeEmail(rawEmail);
+            if (!email || !email.includes('@')) continue;
+            parsed.push({ name: rawName.trim(), email });
+        }
+
+        return dedupeCandidates(parsed);
+    };
+
+    const onUploadCandidates = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file) return;
+
+        try {
+            const imported = await parseCandidateFile(file);
+            if (imported.length === 0) {
+                setError('No valid rows found. Use columns like Name and Email.');
+                return;
+            }
+
+            setCandidates((prev) => {
+                const merged = dedupeCandidates([...prev, ...imported]);
+                return merged.length > 0 ? merged : [{ name: '', email: '' }];
+            });
+            setError('');
+        } catch {
+            setError('Failed to read file. Upload a valid .xlsx, .xls, or .csv file.');
+        }
+    };
+
+    const updateCandidate = (index: number, patch: Partial<{ name: string; email: string }>) => {
+        setCandidates((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+    };
+
+    const addCandidateRow = () => {
+        setCandidates((prev) => [...prev, { name: '', email: '' }]);
+    };
+
+    const removeCandidateRow = (index: number) => {
+        setCandidates((prev) => {
+            const next = prev.filter((_, i) => i !== index);
+            return next.length > 0 ? next : [{ name: '', email: '' }];
+        });
+    };
 
     const handlePublish = async () => {
-        const allowedEmails = Array.from(new Set(
-            emailsText
-                .split(/[\n,;]+/)
-                .map((value) => value.trim().toLowerCase())
-                .filter(Boolean),
-        ));
+        const allowedEmails = dedupeCandidates(candidates).map((row) => row.email);
 
         if (allowedEmails.length === 0) {
-            setError('Enter at least one email ID.');
+            setError('Add at least one valid email.');
             return;
         }
 
@@ -917,17 +1019,52 @@ const PublishModal: React.FC<PublishModalProps> = ({ test, onClose, onPublish })
 
                 <div style={{ display: 'grid', gap: '1rem' }}>
                     <div>
-                        <p className="label" style={{ marginBottom: '0.375rem' }}>Allowed Email IDs</p>
-                        <textarea
-                            className="input"
-                            rows={8}
-                            placeholder={'student1@example.com\nstudent2@example.com'}
-                            value={emailsText}
-                            onChange={(e) => setEmailsText(e.target.value)}
-                            style={{ resize: 'vertical', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.85rem' }}
-                        />
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                            <p className="label">Allowed Students (Name + Email)</p>
+                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    accept=".xlsx,.xls,.csv"
+                                    style={{ display: 'none' }}
+                                    onChange={(event) => void onUploadCandidates(event)}
+                                />
+                                <button type="button" className="btn btn-sm btn-outline" onClick={() => fileInputRef.current?.click()} style={{ gap: '0.35rem' }}>
+                                    <Upload size={12} /> Upload Excel/CSV
+                                </button>
+                                <button type="button" className="btn btn-sm btn-outline" onClick={addCandidateRow}>Add Row</button>
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: '280px', overflowY: 'auto', paddingRight: '0.2rem' }}>
+                            {candidates.map((row, index) => (
+                                <div key={`candidate-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '0.4rem' }}>
+                                    <input
+                                        className="input"
+                                        placeholder="Student Name"
+                                        value={row.name}
+                                        onChange={(e) => updateCandidate(index, { name: e.target.value })}
+                                    />
+                                    <input
+                                        className="input"
+                                        placeholder="student@example.com"
+                                        value={row.email}
+                                        onChange={(e) => updateCandidate(index, { email: e.target.value })}
+                                    />
+                                    <button
+                                        type="button"
+                                        className="btn btn-sm btn-ghost"
+                                        onClick={() => removeCandidateRow(index)}
+                                        aria-label="Remove row"
+                                        title="Remove row"
+                                    >
+                                        <Trash2 size={12} />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
                         <p className="t-small" style={{ color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-                            Use one email per line. Commas and semicolons also work.
+                            Upload file with `Name` and `Email` columns, or fill rows manually.
                         </p>
                     </div>
 
@@ -951,6 +1088,103 @@ const PublishModal: React.FC<PublishModalProps> = ({ test, onClose, onPublish })
                             <Globe size={13} /> {saving ? 'Publishing...' : 'Publish'}
                         </button>
                     </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({ initial, onClose, onSave }) => {
+    const [settings, setSettings] = useState<TestSecuritySettings>(initial);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState('');
+
+    const toggle = (key: keyof TestSecuritySettings) => {
+        setSettings((prev) => ({ ...prev, [key]: !prev[key] }));
+    };
+
+    const handleSave = async () => {
+        setSaving(true);
+        setError('');
+        try {
+            await onSave(settings);
+            onClose();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to save security settings.');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const controls: Array<{ key: keyof TestSecuritySettings; label: string; help: string; icon: React.ComponentType<{ size?: number }> }> = [
+        { key: 'webcam', label: 'Webcam Security', help: 'Require webcam and face monitoring.', icon: Camera },
+        { key: 'microphone', label: 'Microphone Security', help: 'Require microphone and noise monitoring.', icon: Mic },
+        { key: 'tabSwitch', label: 'Tab Change Security', help: 'Track tab switching and focus loss.', icon: Monitor },
+        { key: 'fullscreen', label: 'Fullscreen Security', help: 'Require fullscreen during the exam.', icon: Shield },
+        { key: 'laptopOnly', label: 'Laptop/Desktop Only', help: 'Block exam start from mobile or tablet.', icon: Laptop },
+    ];
+
+    return (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)' }}>
+            <div className="card" style={{ width: 'min(620px, 100%)', padding: '1.25rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', marginBottom: '1rem' }}>
+                    <div>
+                        <h2 className="t-h3" style={{ marginBottom: '0.35rem' }}>Exam Security Controls</h2>
+                        <p className="t-small" style={{ color: 'var(--text-muted)' }}>
+                            Choose which security checks are enabled for this specific exam.
+                        </p>
+                    </div>
+                    <button className="btn btn-sm btn-ghost" onClick={onClose} disabled={saving}>Close</button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                    {controls.map((control) => {
+                        const Icon = control.icon;
+                        return (
+                            <button
+                                key={control.key}
+                                type="button"
+                                onClick={() => toggle(control.key)}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: '0.75rem',
+                                    width: '100%',
+                                    borderRadius: '10px',
+                                    border: `1px solid ${settings[control.key] ? 'var(--accent)' : 'var(--border)'}`,
+                                    background: settings[control.key] ? 'color-mix(in srgb, var(--accent) 8%, var(--surface))' : 'var(--surface)',
+                                    padding: '0.8rem 0.9rem',
+                                    cursor: 'pointer',
+                                    textAlign: 'left',
+                                }}
+                            >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                                    <Icon size={14} />
+                                    <div>
+                                        <p className="t-small" style={{ fontWeight: 800, color: 'var(--text)' }}>{control.label}</p>
+                                        <p className="t-micro" style={{ color: 'var(--text-muted)' }}>{control.help}</p>
+                                    </div>
+                                </div>
+                                <span className={`badge ${settings[control.key] ? 'badge-success' : 'badge-neutral'}`}>
+                                    {settings[control.key] ? 'Enabled' : 'Disabled'}
+                                </span>
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {error && (
+                    <div style={{ marginTop: '0.9rem', padding: '0.75rem 0.9rem', borderRadius: '10px', border: '1px solid var(--danger)', color: 'var(--danger)', background: 'var(--bg)' }}>
+                        {error}
+                    </div>
+                )}
+
+                <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
+                    <button className="btn btn-sm btn-outline" onClick={onClose} disabled={saving}>Cancel</button>
+                    <button className="btn btn-sm btn-primary hover-glow" onClick={() => void handleSave()} disabled={saving} style={{ gap: '0.375rem' }}>
+                        <Shield size={13} /> {saving ? 'Saving...' : 'Save Security'}
+                    </button>
                 </div>
             </div>
         </div>
@@ -1055,6 +1289,7 @@ const TestEditor: React.FC = () => {
     const [testAssignments, setTestAssignments] = useState<{ groupId?: string; studentId?: string; assignmentCode?: string; studentName?: string; groupName?: string }[]>([]);
     const [savingAssignments, setSavingAssignments] = useState(false);
     const [showPublishModal, setShowPublishModal] = useState(false);
+    const [showSecurityModal, setShowSecurityModal] = useState(false);
 
     const test = getTest(testId ?? '');
 
@@ -1200,7 +1435,12 @@ const TestEditor: React.FC = () => {
 
                 <aside style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                     <div className="card" style={{ padding: '1.125rem' }}>
-                        <p className="label" style={{ marginBottom: '0.875rem', color: 'var(--text-muted)' }}>Test Settings</p>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.875rem' }}>
+                            <p className="label" style={{ color: 'var(--text-muted)' }}>Test Settings</p>
+                            <button className="btn btn-sm btn-outline" style={{ gap: '0.35rem' }} onClick={() => setShowSecurityModal(true)}>
+                                <Shield size={13} /> Security
+                            </button>
+                        </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
                             <div>
                                 <p className="label" style={{ marginBottom: '0.3rem' }}>Title</p>
@@ -1346,6 +1586,13 @@ const TestEditor: React.FC = () => {
                     test={{ id: test.id, title: test.title, allowedEmails: test.allowedEmails, accessCode: test.accessCode }}
                     onClose={() => setShowPublishModal(false)}
                     onPublish={(options) => publishTest(test.id, options)}
+                />
+            )}
+            {showSecurityModal && (
+                <SecuritySettingsModal
+                    initial={test.securitySettings}
+                    onClose={() => setShowSecurityModal(false)}
+                    onSave={(settings) => updateTest(test.id, { securitySettings: settings })}
                 />
             )}
 
