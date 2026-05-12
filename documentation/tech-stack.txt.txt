@@ -1,0 +1,31 @@
+Backend stack
+
+Runtime & Language
+Node.js with TypeScript
+
+Framework
+NestJS v11 — the core framework (modular, decorator-based)
+
+Database & ORM
+Prisma v6 — ORM for database access
+
+Authentication
+Passport.js with JWT strategy (passport-jwt, @nestjs/jwt)
+bcryptjs for password hashing
+
+Real-time
+Socket.IO v4 via @nestjs/websockets and @nestjs/platform-socket.io
+
+Storage
+AWS S3 via @aws-sdk/client-s3 and @aws-sdk/s3-request-presigner
+
+API & Validation
+Swagger (@nestjs/swagger) for API docs
+
+class-validator + class-transformer for DTO validation
+Zod v4 for schema validation
+Helmet for security headers
+@nestjs/throttler for rate limiting
+
+Config
+@nestjs/config for environment variable management

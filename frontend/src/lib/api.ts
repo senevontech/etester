@@ -1,3 +1,7 @@
+import { ApiError } from './apiError';
+import { supabaseApiRequest } from './supabaseApi';
+import { getBackendProvider } from './supabase';
+
 const normalizeApiBaseUrl = (value?: string) => {
     const fallback = 'http://localhost:3001/api';
     const raw = (value || fallback).trim();
@@ -15,13 +19,13 @@ const normalizeApiBaseUrl = (value?: string) => {
 };
 
 const API_BASE_URL = normalizeApiBaseUrl(import.meta.env.VITE_API_BASE_URL as string | undefined);
+const BACKEND_PROVIDER = getBackendProvider();
 
 const TOKEN_KEY = 'etester-api-token';
 
 export type Role = 'superadmin' | 'admin' | 'subadmin' | 'student';
 
 export interface ApiSession {
-    token: string;
     userId: string;
     createdAt: string;
 }
@@ -60,13 +64,17 @@ export interface ApiOrgMember {
     profile?: ApiProfile;
 }
 
-export const getStoredToken = () => localStorage.getItem(TOKEN_KEY);
+export { ApiError } from './apiError';
+
+export const getStoredToken = () => BACKEND_PROVIDER === 'supabase' ? null : localStorage.getItem(TOKEN_KEY);
 
 export const storeToken = (token: string) => {
+    if (BACKEND_PROVIDER === 'supabase') return;
     localStorage.setItem(TOKEN_KEY, token);
 };
 
 export const clearStoredToken = () => {
+    if (BACKEND_PROVIDER === 'supabase') return;
     localStorage.removeItem(TOKEN_KEY);
 };
 
@@ -75,17 +83,14 @@ interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
     token?: string | null;
 }
 
-export class ApiError extends Error {
-    status: number;
-
-    constructor(message: string, status: number) {
-        super(message);
-        this.name = 'ApiError';
-        this.status = status;
-    }
-}
-
 export const apiRequest = async <T>(path: string, options: ApiRequestOptions = {}): Promise<T> => {
+    if (BACKEND_PROVIDER === 'supabase') {
+        return supabaseApiRequest<T>(path, {
+            body: options.body,
+            method: options.method,
+        });
+    }
+
     const token = options.token ?? getStoredToken();
     const headers = new Headers(options.headers);
 
@@ -94,6 +99,7 @@ export const apiRequest = async <T>(path: string, options: ApiRequestOptions = {
 
     const response = await fetch(`${API_BASE_URL}${path}`, {
         ...options,
+        credentials: options.credentials ?? 'include',
         headers,
         body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     });

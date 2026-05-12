@@ -69,7 +69,7 @@ interface GroupMembersResponse {
 }
 
 export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const { user, setUserRole, session } = useAuth();
+    const { user, setUserRole } = useAuth();
     const [activeOrg, setActiveOrg] = useState<Organization | null>(null);
     const [userOrgs, setUserOrgs] = useState<Organization[]>([]);
     const [orgMembers, setOrgMembers] = useState<OrgMember[]>([]);
@@ -79,7 +79,6 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const userId = user?.id;
     const activeOrgId = activeOrg?.id;
-    const sessionToken = session?.token;
 
     const rowToGroup = (row: any): Group => ({
         id: row.id,
@@ -92,7 +91,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const fetchUserOrgs = useCallback(async () => {
         const fetchVersion = ++fetchVersionRef.current;
 
-        if (!userId || !sessionToken) {
+        if (!userId) {
             setUserOrgs([]);
             setActiveOrg(null);
             setOrgMembers([]);
@@ -135,7 +134,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } finally {
             if (fetchVersion === fetchVersionRef.current) setLoading(false);
         }
-    }, [sessionToken, setUserRole, user?.role, userId]);
+    }, [setUserRole, user?.role, userId]);
 
     useEffect(() => {
         void fetchUserOrgs();
