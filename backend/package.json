@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "node --check src/index.ts && node --check src/controllers/apiController.ts && node --check src/routes/apiRoutes.ts && node --check src/services/codeExecution.ts && node --check src/services/db.ts && node --check src/seed.ts && node --check src/utils/env.ts",
+    "build": "node --check index.js && node --check src/index.ts && node --check src/controllers/apiController.ts && node --check src/routes/apiRoutes.ts && node --check src/services/codeExecution.ts && node --check src/services/db.ts && node --check src/seed.ts && node --check src/utils/env.ts",
     "dev": "node src/index.ts",
     "start": "node src/index.ts",
     "seed": "node src/seed.ts",
