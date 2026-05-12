@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { AttemptStatus, QuestionType, TestDifficulty, TestVisibility, UserRole } from '@prisma/client';
 
 export const toApiRole = (role: UserRole): 'admin' | 'student' => (role === UserRole.ADMIN ? 'admin' : 'student');

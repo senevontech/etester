@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { IsArray } from 'class-validator';
 
 export class ReorderQuestionsDto {

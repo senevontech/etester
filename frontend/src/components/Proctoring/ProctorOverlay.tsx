@@ -23,7 +23,7 @@ const ProctorOverlay: React.FC<ProctorOverlayProps> = ({ violations }) => {
     }, [violations]);
 
     return (
-        <div style={{ position: 'fixed', bottom: '1.25rem', left: '1.25rem', zIndex: 1100, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.625rem', pointerEvents: 'none' }}>
+        <div className="proctor-overlay" style={{ position: 'fixed', bottom: '1.25rem', left: '1.25rem', zIndex: 1100, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.625rem', pointerEvents: 'none' }}>
             {/* Integrity chip */}
             <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
                 style={{ pointerEvents: 'auto', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '8px', padding: '0.5rem 0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem', boxShadow: 'var(--shadow-sm)', minWidth: '160px' }}>
@@ -56,6 +56,21 @@ const ProctorOverlay: React.FC<ProctorOverlayProps> = ({ violations }) => {
                     </motion.div>
                 )}
             </AnimatePresence>
+            <style>{`
+                @media (max-width: 900px) {
+                    .proctor-overlay {
+                        left: 0.75rem !important;
+                        bottom: 0.75rem !important;
+                    }
+                    .proctor-overlay > div:first-child {
+                        min-width: 126px !important;
+                        padding: 0.45rem 0.55rem !important;
+                    }
+                    .proctor-overlay p {
+                        font-size: 9px !important;
+                    }
+                }
+            `}</style>
         </div>
     );
 };

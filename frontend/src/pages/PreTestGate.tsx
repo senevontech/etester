@@ -9,7 +9,8 @@ import {
     AlertCircle, 
     Wifi, 
     ChevronRight,
-    ArrowLeft
+    ArrowLeft,
+    CalendarClock
 } from 'lucide-react';
 import { useTests } from '../context/TestContext';
 import Navbar from '../components/Layout/Navbar';
@@ -24,7 +25,19 @@ const DEFAULT_SECURITY_SETTINGS = {
 
 const isMobileLikeDevice = () => {
     const userAgent = navigator.userAgent.toLowerCase();
-    return /android|iphone|ipad|ipod|mobile|windows phone|opera mini|silk\//.test(userAgent);
+    const isTouchMac = /macintosh/.test(userAgent) && navigator.maxTouchPoints > 1;
+    return isTouchMac || /android|iphone|ipad|ipod|tablet|mobile|windows phone|opera mini|silk\//.test(userAgent);
+};
+
+const formatDateTime = (value: Date | null) => {
+    if (!value || Number.isNaN(value.getTime())) return 'Not set';
+    return value.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+    });
 };
 
 const PreTestGate: React.FC = () => {
@@ -44,7 +57,18 @@ const PreTestGate: React.FC = () => {
     const test = tests.find(t => t.id === testId);
     const security = test?.securitySettings ?? DEFAULT_SECURITY_SETTINGS;
     const requiresExamCode = Boolean(test?.hasAccessCode || test?.accessCode);
-    const blockedByDevicePolicy = security.laptopOnly && isMobileLikeDevice();
+    const isMobileOrTablet = isMobileLikeDevice();
+    const blockedByDevicePolicy = security.laptopOnly && isMobileOrTablet;
+    const fullscreenSupported = Boolean(document.documentElement.requestFullscreen);
+    const fullscreenOptionalForAllowedMobile = isMobileOrTablet && !security.laptopOnly && !fullscreenSupported;
+    const fullscreenRequired = security.fullscreen && !fullscreenOptionalForAllowedMobile;
+    const now = new Date();
+    const startAt = test?.startAt ? new Date(test.startAt) : null;
+    const endAt = test?.endAt ? new Date(test.endAt) : null;
+    const isBeforeStart = Boolean(startAt && now < startAt);
+    const isAfterEnd = Boolean(endAt && now > endAt);
+    const isExamOpen = !isBeforeStart && !isAfterEnd;
+    const scheduleLabel = isBeforeStart ? 'Upcoming' : isAfterEnd ? 'Closed' : 'Open now';
 
     useEffect(() => {
         if (!test) return;
@@ -89,7 +113,7 @@ const PreTestGate: React.FC = () => {
             setInternetStatus(navigator.onLine ? 'success' : 'error');
             
             // Initial fullscreen check
-            if (!security.fullscreen) {
+            if (!fullscreenRequired) {
                 setFsStatus('success');
             } else {
                 setFsStatus(document.fullscreenElement ? 'success' : 'pending');
@@ -99,7 +123,7 @@ const PreTestGate: React.FC = () => {
         void checkHardware();
 
         const handleFsChange = () => {
-            if (!security.fullscreen) {
+            if (!fullscreenRequired) {
                 setFsStatus('success');
                 return;
             }
@@ -116,10 +140,10 @@ const PreTestGate: React.FC = () => {
                 micStream.getTracks().forEach((track) => track.stop());
             }
         };
-    }, [test, security.webcam, security.microphone, security.fullscreen]);
+    }, [test, security.webcam, security.microphone, fullscreenRequired]);
 
     const enterFullscreen = async () => {
-        if (!security.fullscreen) {
+        if (!fullscreenRequired) {
             setFsStatus('success');
             return;
         }
@@ -134,7 +158,7 @@ const PreTestGate: React.FC = () => {
     const handleStart = () => {
         const checksPassed = (!security.webcam || webcamStatus === 'success')
             && (!security.microphone || micStatus === 'success')
-            && (!security.fullscreen || fsStatus === 'success');
+            && (!fullscreenRequired || fsStatus === 'success');
         const hasExamCode = !requiresExamCode || Boolean(examCode.trim());
 
         if (!checksPassed || !agreed || !hasExamCode || !isExamOpen || blockedByDevicePolicy) return;
@@ -148,19 +172,12 @@ const PreTestGate: React.FC = () => {
         if (!agreed) return 'Accept the proctoring rules before starting.';
         if (security.webcam && webcamStatus !== 'success') return `Camera check failed: ${webcamMessage}`;
         if (security.microphone && micStatus !== 'success') return 'Enable microphone permission to start the assessment.';
-        if (security.fullscreen && fsStatus !== 'success') return 'Enable fullscreen to start the assessment.';
+        if (fullscreenRequired && fsStatus !== 'success') return 'Enable fullscreen to start the assessment.';
         if (requiresExamCode && !examCode.trim()) return 'Enter the exam code to start.';
         return '';
-    }, [agreed, blockedByDevicePolicy, security.webcam, security.microphone, security.fullscreen, fsStatus, webcamMessage, webcamStatus, micStatus, requiresExamCode, examCode]);
+    }, [agreed, blockedByDevicePolicy, security.webcam, security.microphone, fullscreenRequired, fsStatus, webcamMessage, webcamStatus, micStatus, requiresExamCode, examCode]);
 
     if (!test) return null;
-
-    const now = new Date();
-    const startAt = test.startAt ? new Date(test.startAt) : null;
-    const endAt = test.endAt ? new Date(test.endAt) : null;
-    const isBeforeStart = Boolean(startAt && now < startAt);
-    const isAfterEnd = Boolean(endAt && now > endAt);
-    const isExamOpen = !isBeforeStart && !isAfterEnd;
 
     return (
         <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
@@ -183,10 +200,18 @@ const PreTestGate: React.FC = () => {
 
                         {(startAt || endAt) && (
                             <div className="card" style={{ padding: '1rem', marginBottom: '1rem', borderColor: isExamOpen ? 'var(--border)' : 'var(--warning)' }}>
-                                <p className="label" style={{ marginBottom: '0.35rem' }}>Exam Schedule</p>
-                                <p className="t-small" style={{ color: 'var(--text)', fontWeight: 800 }}>
-                                    {startAt?.toLocaleString() ?? 'Start not set'} - {endAt?.toLocaleString() ?? 'End not set'}
-                                </p>
+                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+                                    <CalendarClock size={18} style={{ color: isExamOpen ? 'var(--success)' : 'var(--warning)', marginTop: '2px', flexShrink: 0 }} />
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+                                            <p className="label">Exam Schedule</p>
+                                            <span className="badge badge-neutral" style={{ color: isExamOpen ? 'var(--success)' : 'var(--warning)' }}>{scheduleLabel}</span>
+                                        </div>
+                                        <p className="t-small" style={{ color: 'var(--text)', fontWeight: 800 }}>
+                                            {formatDateTime(startAt)} to {formatDateTime(endAt)}
+                                        </p>
+                                    </div>
+                                </div>
                                 {!isExamOpen && (
                                     <p className="t-small" style={{ color: 'var(--warning)', marginTop: '0.4rem', fontWeight: 800 }}>
                                         {isBeforeStart ? 'This exam has not started yet.' : 'This exam window has ended.'}
@@ -213,7 +238,7 @@ const PreTestGate: React.FC = () => {
                                 {security.fullscreen && (
                                     <li style={{ display: 'flex', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
                                     <Maximize size={18} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-                                    <span>Fullscreen is mandatory. Leaving fullscreen will flag your attempt.</span>
+                                    <span>{fullscreenOptionalForAllowedMobile ? 'Fullscreen is skipped on this mobile/tablet browser because it is not supported.' : 'Fullscreen is mandatory. Leaving fullscreen will flag your attempt.'}</span>
                                     </li>
                                 )}
                                 {security.tabSwitch && (
@@ -226,6 +251,12 @@ const PreTestGate: React.FC = () => {
                                     <li style={{ display: 'flex', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
                                         <Wifi size={18} style={{ color: 'var(--accent)', flexShrink: 0 }} />
                                         <span>This exam can be started only from a laptop or desktop browser.</span>
+                                    </li>
+                                )}
+                                {test.negativeMarkingEnabled && (
+                                    <li style={{ display: 'flex', gap: '0.75rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                        <AlertCircle size={18} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+                                        <span>Negative marking is enabled: {test.negativeMarkValue} point{test.negativeMarkValue === 1 ? '' : 's'} will be deducted for each wrong attempted answer.</span>
                                     </li>
                                 )}
                             </ul>
@@ -297,12 +328,17 @@ const PreTestGate: React.FC = () => {
                                         <Maximize size={16} />
                                         <span className="t-small" style={{ fontWeight: 700 }}>Fullscreen</span>
                                     </div>
-                                    {fsStatus === 'success' || !security.fullscreen ? (
+                                    {fsStatus === 'success' || !fullscreenRequired ? (
                                         <CheckCircle2 size={18} color="var(--success)" />
                                     ) : (
                                         <button className="btn btn-sm btn-outline" onClick={enterFullscreen}>Enable</button>
                                     )}
                                 </div>
+                                {fullscreenOptionalForAllowedMobile && (
+                                    <p className="t-small" style={{ color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                                        Fullscreen is not supported by this mobile/tablet browser, so it will not block this exam.
+                                    </p>
+                                )}
 
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border)', background: micStatus === 'success' ? 'var(--success-bg)' : 'transparent' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -328,7 +364,7 @@ const PreTestGate: React.FC = () => {
                                         !agreed
                                         || (security.webcam && webcamStatus !== 'success')
                                         || (security.microphone && micStatus !== 'success')
-                                        || (security.fullscreen && fsStatus !== 'success')
+                                        || (fullscreenRequired && fsStatus !== 'success')
                                         || (requiresExamCode && !examCode.trim())
                                         || !isExamOpen
                                         || blockedByDevicePolicy
@@ -340,7 +376,7 @@ const PreTestGate: React.FC = () => {
                                     !agreed
                                     || (security.webcam && webcamStatus !== 'success')
                                     || (security.microphone && micStatus !== 'success')
-                                    || (security.fullscreen && fsStatus !== 'success')
+                                    || (fullscreenRequired && fsStatus !== 'success')
                                     || (requiresExamCode && !examCode.trim())
                                     || !isExamOpen
                                     || blockedByDevicePolicy

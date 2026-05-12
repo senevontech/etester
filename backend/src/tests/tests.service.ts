@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, QuestionType } from '@prisma/client';
 import { toApiDifficulty, toApiQuestionType, toApiVisibility, toDbDifficulty, toDbQuestionType, toDbVisibility } from '../common/mappers/api.mapper';

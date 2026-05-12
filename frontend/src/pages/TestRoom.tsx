@@ -25,7 +25,8 @@ const DEFAULT_SECURITY_SETTINGS = {
 
 const isMobileLikeDevice = () => {
     const userAgent = navigator.userAgent.toLowerCase();
-    return /android|iphone|ipad|ipod|mobile|windows phone|opera mini|silk\//.test(userAgent);
+    const isTouchMac = /macintosh/.test(userAgent) && navigator.maxTouchPoints > 1;
+    return isTouchMac || /android|iphone|ipad|ipod|tablet|mobile|windows phone|opera mini|silk\//.test(userAgent);
 };
 
 interface TerminalLog {
@@ -54,16 +55,19 @@ const TestRoom: React.FC = () => {
     const { testId } = useParams<{ testId: string }>();
     const navigate = useNavigate();
     const { theme } = useTheme();
-    const { getTest } = useTests();
+    const { getTest, refetch: refetchTests } = useTests();
     const { user } = useAuth();
     const { submitTest } = useResults();
 
     const test = getTest(testId ?? '');
     const security = test?.securitySettings ?? DEFAULT_SECURITY_SETTINGS;
-    const blockedByDevicePolicy = security.laptopOnly && isMobileLikeDevice();
+    const isMobileOrTablet = isMobileLikeDevice();
+    const blockedByDevicePolicy = security.laptopOnly && isMobileOrTablet;
+    const fullscreenSupported = Boolean(document.documentElement.requestFullscreen);
+    const fullscreenRequired = security.fullscreen && !(isMobileOrTablet && !security.laptopOnly && !fullscreenSupported);
     const { violations, isFullscreen, tabSwitchCount, fullscreenExitCount, enterFullscreen } = useProctoring(true, {
         tabSwitch: security.tabSwitch,
-        fullscreen: security.fullscreen,
+        fullscreen: fullscreenRequired,
     });
 
     const [idx, setIdx] = useState(0);
@@ -93,12 +97,12 @@ const TestRoom: React.FC = () => {
 
     // Enter fullscreen → unlock the test gate
     useEffect(() => {
-        if (!security.fullscreen && !fullscreenReady) {
+        if (!fullscreenRequired && !fullscreenReady) {
             setFullscreenReady(true);
             return;
         }
         if (isFullscreen && !fullscreenReady) setFullscreenReady(true);
-    }, [isFullscreen, fullscreenReady, security.fullscreen]);
+    }, [isFullscreen, fullscreenReady, fullscreenRequired]);
 
     useEffect(() => {
         if (q && q.type === 'code') {
@@ -391,6 +395,7 @@ const TestRoom: React.FC = () => {
                 violations,
                 reason ?? null,
             );
+            await refetchTests();
         } catch (error) {
             setFinishing(false);
             setSubmitError(error instanceof Error ? error.message : 'Submission failed. Please try again.');
@@ -425,7 +430,7 @@ const TestRoom: React.FC = () => {
 
     // Fullscreen exit enforcement — 2 warnings, 3rd exit auto-submits
     useEffect(() => {
-        if (!security.fullscreen) return;
+        if (!fullscreenRequired) return;
         if (fullscreenExitCount === 0) return;
         void logViolation('fullscreen_exit', { count: fullscreenExitCount });
         if (fullscreenExitCount === 1) {
@@ -436,13 +441,13 @@ const TestRoom: React.FC = () => {
             setFsWarningLevel(0);
             setAutoSubmitReason('Exited fullscreen mode 3 times.');
         }
-    }, [fullscreenExitCount, logViolation, security.fullscreen]);
+    }, [fullscreenExitCount, logViolation, fullscreenRequired]);
 
     // Clear fullscreen warning when candidate re-enters fullscreen
     useEffect(() => {
-        if (!security.fullscreen) return;
+        if (!fullscreenRequired) return;
         if (isFullscreen) setFsWarningLevel(0);
-    }, [isFullscreen, security.fullscreen]);
+    }, [isFullscreen, fullscreenRequired]);
 
     // Tab-switch enforcement
     useEffect(() => {
@@ -544,8 +549,8 @@ const TestRoom: React.FC = () => {
     const activeAns = q ? answers[q.id] : undefined;
 
     return (
-        <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden' }}>
-            <header style={{ height: '52px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 1.25rem', borderBottom: '1px solid var(--border)', flexShrink: 0, zIndex: 50, gap: '1rem' }}>
+        <div className="test-room-shell" style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden' }}>
+            <header className="test-room-header" style={{ height: '52px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 1.25rem', borderBottom: '1px solid var(--border)', flexShrink: 0, zIndex: 50, gap: '1rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.875rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }} onClick={() => navigate('/')}>
                         <div style={{ width: '26px', height: '26px', background: 'var(--accent)', borderRadius: '5px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -563,8 +568,8 @@ const TestRoom: React.FC = () => {
                     </div>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <button className="btn btn-sm btn-ghost" style={{ gap: '0.375rem' }} onClick={() => navigate('/')}>
+                <div className="test-room-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <button className="btn btn-sm btn-ghost test-room-home" style={{ gap: '0.375rem' }} onClick={() => navigate('/')}>
                         <House size={13} /> Home
                     </button>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', padding: '0.3rem 0.75rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '7px' }}>
@@ -582,10 +587,10 @@ const TestRoom: React.FC = () => {
                 </div>
             </header>
 
-            <main style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+            <main className="test-room-main" style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
                 {/* ── Left Question Nav Sidebar ── */}
-                <nav style={{ width: '220px', flexShrink: 0, borderRight: '1px solid var(--border)', background: 'var(--bg-subtle)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <nav className="test-room-nav" style={{ width: '220px', flexShrink: 0, borderRight: '1px solid var(--border)', background: 'var(--bg-subtle)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                     <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
                         <p style={{ fontSize: '10px', fontWeight: 900, color: 'var(--text-muted)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '0.625rem', fontFamily: 'Manrope' }}>Question Panel</p>
                         {/* Progress bar */}
@@ -613,8 +618,8 @@ const TestRoom: React.FC = () => {
                     </div>
 
                     {/* Question grid */}
-                    <div style={{ flex: 1, overflowY: 'auto', padding: '0.875rem' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', marginBottom: '1rem' }}>
+                    <div className="test-room-nav-scroll" style={{ flex: 1, overflowY: 'auto', padding: '0.875rem' }}>
+                        <div className="test-room-question-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', marginBottom: '1rem' }}>
                             {test.questions.map((question, i) => {
                                 const state = answers[question.id];
                                 const isAnswered = state?.type === 'mcq'
@@ -680,9 +685,9 @@ const TestRoom: React.FC = () => {
                 {/* ── Main content area ── */}
                 {q?.type === 'code' ? (
                     /* Code question: split question-panel | editor */
-                    <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+                    <div className="test-room-code-layout" style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
                         {/* Question pane */}
-                        <div style={{ width: '42%', flexShrink: 0, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                        <div className="test-room-code-question" style={{ width: '42%', flexShrink: 0, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                             <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem' }}>
                                 <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                                     <span className="badge badge-warning">{getQuestionChipLabel(q)}</span>
@@ -739,7 +744,7 @@ const TestRoom: React.FC = () => {
                         </div>
 
                         {/* Editor + Terminal pane */}
-                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                        <div className="test-room-code-workspace" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                             <div style={{ padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--surface)', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                     <TerminalSquare size={13} style={{ color: 'var(--text-muted)' }} />
@@ -761,7 +766,7 @@ const TestRoom: React.FC = () => {
                                     ))}
                                 </select>
                             </div>
-                            <div style={{ flex: 1, overflow: 'hidden' }}>
+                            <div className="test-room-editor-area" style={{ flex: 1, overflow: 'hidden' }}>
                                 <Editor
                                     height="100%"
                                     language={currentLang}
@@ -771,7 +776,7 @@ const TestRoom: React.FC = () => {
                                     options={{ minimap: { enabled: false }, fontSize: 13, fontFamily: 'JetBrains Mono', fontLigatures: true, scrollBeyondLastLine: false, padding: { top: 16 }, cursorSmoothCaretAnimation: 'on', smoothScrolling: true }}
                                 />
                             </div>
-                            <div style={{ height: '200px', display: 'flex', flexDirection: 'column', flexShrink: 0, borderTop: '1px solid var(--border)', background: 'var(--bg-subtle)' }}>
+                            <div className="test-room-terminal" style={{ height: '200px', display: 'flex', flexDirection: 'column', flexShrink: 0, borderTop: '1px solid var(--border)', background: 'var(--bg-subtle)' }}>
                                 <div style={{ padding: '0.5rem 1rem', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                         <Terminal size={13} style={{ color: 'var(--text-muted)' }} />
@@ -798,7 +803,7 @@ const TestRoom: React.FC = () => {
                     </div>
                 ) : (
                     /* MCQ / Text / Numeric: centered content card */
-                    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2rem 1.5rem', background: 'var(--bg)' }}>
+                    <div className="test-room-standard-question" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2rem 1.5rem', background: 'var(--bg)' }}>
                         {q && (
                             <div style={{ width: '100%', maxWidth: '780px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                                 {/* Question card */}
@@ -1059,6 +1064,106 @@ const TestRoom: React.FC = () => {
             <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+        @media (max-width: 900px) {
+          .test-room-shell {
+            height: 100dvh !important;
+          }
+          .test-room-header {
+            height: auto !important;
+            min-height: 56px !important;
+            padding: 0.5rem 0.75rem !important;
+            align-items: flex-start !important;
+          }
+          .test-room-header > div:first-child {
+            min-width: 0 !important;
+            flex: 1 !important;
+          }
+          .test-room-header > div:first-child > div:last-child {
+            min-width: 0 !important;
+          }
+          .test-room-header > div:first-child > div:last-child p:first-child {
+            max-width: 44vw !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            white-space: nowrap !important;
+          }
+          .test-room-actions {
+            gap: 0.4rem !important;
+            flex-wrap: wrap !important;
+            justify-content: flex-end !important;
+          }
+          .test-room-home,
+          .test-room-actions > svg,
+          .test-room-actions > div[style*="width: 1px"] {
+            display: none !important;
+          }
+          .test-room-main {
+            flex-direction: column !important;
+            overflow: auto !important;
+          }
+          .test-room-nav {
+            width: 100% !important;
+            max-height: 190px !important;
+            border-right: 0 !important;
+            border-bottom: 1px solid var(--border) !important;
+          }
+          .test-room-nav-scroll {
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            padding: 0.75rem !important;
+          }
+          .test-room-question-grid {
+            display: flex !important;
+            gap: 0.5rem !important;
+            min-width: max-content !important;
+            margin-bottom: 0.75rem !important;
+          }
+          .test-room-question-grid button {
+            width: 38px !important;
+            height: 38px !important;
+            aspect-ratio: auto !important;
+            flex: 0 0 auto !important;
+          }
+          .test-room-code-layout {
+            flex-direction: column !important;
+            overflow: visible !important;
+          }
+          .test-room-code-question {
+            width: 100% !important;
+            max-height: none !important;
+            border-right: 0 !important;
+            border-bottom: 1px solid var(--border) !important;
+            overflow: visible !important;
+          }
+          .test-room-code-question > div:first-child {
+            max-height: none !important;
+            overflow: visible !important;
+            padding: 1rem !important;
+          }
+          .test-room-code-workspace {
+            min-height: 620px !important;
+            overflow: visible !important;
+          }
+          .test-room-editor-area {
+            height: 360px !important;
+            min-height: 360px !important;
+            flex: 0 0 360px !important;
+          }
+          .test-room-terminal {
+            height: 180px !important;
+          }
+          .test-room-standard-question {
+            padding: 1rem 0.75rem 8rem !important;
+            overflow: visible !important;
+          }
+          .test-room-standard-question > div {
+            gap: 1rem !important;
+          }
+          .test-room-standard-question [style*="padding: 2rem"],
+          .test-room-standard-question [style*="padding: 1.75rem"] {
+            padding: 1rem !important;
+          }
+        }
       `}</style>
         </div>
     );
