@@ -396,6 +396,12 @@ const normalizeClientId = (value) => {
     return clientId;
 };
 
+const normalizeInterviewCodeInput = (value) => {
+    const code = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 32);
+    if (!code) throw new HttpError(400, 'Interview code is required.');
+    return code;
+};
+
 const normalizeParticipantName = (value, fallback = 'Participant') => {
     const name = String(value || '').trim().slice(0, 120);
     return name || fallback;
@@ -1787,7 +1793,10 @@ export const handleRequest = async (req, res) => {
 
     match = pathname.match(/^\/api\/interviews\/code\/([^/]+)$/);
     if (req.method === 'GET' && match) {
-        const interviewCode = decodeURIComponent(match[1]).trim().toUpperCase();
+        const interviewCode = normalizeInterviewCodeInput(decodeURIComponent(match[1]));
+        const codeVariants = interviewCode.startsWith('INT')
+            ? [interviewCode]
+            : [interviewCode, `INT${interviewCode}`];
         const { rows } = await query(`
             SELECT
                 i.*,
@@ -1796,10 +1805,10 @@ export const handleRequest = async (req, res) => {
             FROM interviews i
             LEFT JOIN users u ON u.id = i.created_by
             LEFT JOIN interview_participants ip ON ip.interview_id = i.id
-            WHERE UPPER(i.interview_code) = $1
+            WHERE REGEXP_REPLACE(UPPER(i.interview_code), '[^A-Z0-9]', '', 'g') = ANY($1::text[])
             GROUP BY i.id, u.name
             LIMIT 1
-        `, [interviewCode]);
+        `, [codeVariants]);
 
         if (rows.length === 0) throw new HttpError(404, 'Interview not found.');
         sendJson(req, res, 200, { interview: mapInterviewRow(rows[0]) });

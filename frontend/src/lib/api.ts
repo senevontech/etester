@@ -1,7 +1,7 @@
 import { ApiError } from './apiError';
 
 const normalizeApiBaseUrl = (value?: string) => {
-    const fallback = 'http://localhost:3001/api';
+    const fallback = import.meta.env.DEV ? 'http://localhost:3001/api' : '/api';
     const raw = (value || fallback).trim();
 
     try {

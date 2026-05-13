@@ -165,7 +165,7 @@ const Dashboard: React.FC = () => {
     });
 
     const joinInterview = (interviewId: string) => {
-        const code = (interviewCodes[interviewId] || '').trim();
+        const code = (interviewCodes[interviewId] || '').trim().toUpperCase().replace(/\s+/g, '');
         if (!code) return;
         navigate(`/interview/${encodeURIComponent(code)}`);
     };

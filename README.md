@@ -111,3 +111,11 @@ cmd /c npm run typecheck:backend
 - If PostgreSQL is not running or the database does not exist, the backend will fail on startup.
 - `CODE_EXECUTION_PROVIDER=disabled` is safest for production unless you have a sandboxed judge service.
 - `CODE_EXECUTION_PROVIDER=local` should only be used in trusted development environments.
+
+## Deployment Checklist
+
+- Set `DATABASE_URL` on the deployed backend to the production PostgreSQL database. Interview codes created locally will not exist in the deployed database.
+- Set `ALLOWED_ORIGINS` on the backend to the deployed frontend origin, for example `https://your-frontend-domain.com`.
+- Set `VITE_API_BASE_URL` before building the frontend if the API is on a different domain, for example `https://your-api-domain.com/api`.
+- If the frontend and backend are served from the same domain, the production frontend can use the default `/api` fallback.
+- After backend changes, redeploy/restart the backend so startup migrations add the latest interview tables and columns.

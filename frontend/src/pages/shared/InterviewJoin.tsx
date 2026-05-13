@@ -16,7 +16,7 @@ import {
 import Navbar from '../../components/Layout/Navbar';
 import { useAuth } from '../../context/AuthContext';
 import { useProctoring } from '../../hooks/useProctoring';
-import { apiRequest } from '../../lib/api';
+import { ApiError, apiRequest } from '../../lib/api';
 
 type InterviewStatus = 'scheduled' | 'live' | 'completed' | 'cancelled';
 type RoomMode = 'group' | 'individual';
@@ -67,6 +67,8 @@ const createClientId = () => {
     if (crypto.randomUUID) return crypto.randomUUID();
     return `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 };
+
+const normalizeInterviewCode = (value: string) => value.trim().toUpperCase().replace(/\s+/g, '');
 
 const isSessionDescription = (value: unknown): value is RTCSessionDescriptionInit => {
     if (!value || typeof value !== 'object') return false;
@@ -145,10 +147,15 @@ const InterviewJoin: React.FC = () => {
             setLoading(true);
             setError(null);
             try {
-                const data = await apiRequest<{ interview: ApiInterview }>(`/interviews/code/${encodeURIComponent(code)}`);
+                const normalizedCode = normalizeInterviewCode(code);
+                const data = await apiRequest<{ interview: ApiInterview }>(`/interviews/code/${encodeURIComponent(normalizedCode)}`);
                 setInterview(data.interview);
             } catch (err) {
-                setError(err instanceof Error ? err.message : 'Interview not found.');
+                if (err instanceof ApiError && err.status === 404) {
+                    setError('Interview code not found. Check the code and try again.');
+                } else {
+                    setError(err instanceof Error ? err.message : 'Interview not found.');
+                }
             } finally {
                 setLoading(false);
             }
