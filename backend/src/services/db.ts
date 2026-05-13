@@ -374,6 +374,87 @@ export const initDb = async () => {
     `);
 
     await query(`
+        CREATE TABLE IF NOT EXISTS interviews (
+            id TEXT PRIMARY KEY,
+            org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            candidate_name TEXT NOT NULL DEFAULT '',
+            candidate_email TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            scheduled_at TIMESTAMPTZ NOT NULL,
+            duration_minutes INTEGER NOT NULL DEFAULT 45,
+            meeting_url TEXT NOT NULL DEFAULT '',
+            interview_code TEXT NOT NULL UNIQUE,
+            allow_screen_share BOOLEAN NOT NULL DEFAULT FALSE,
+            enable_integrity_monitoring BOOLEAN NOT NULL DEFAULT TRUE,
+            room_mode TEXT NOT NULL DEFAULT 'group' CHECK (room_mode IN ('group', 'individual')),
+            status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'live', 'completed', 'cancelled')),
+            created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS interview_participants (
+            id TEXT PRIMARY KEY,
+            interview_id TEXT NOT NULL REFERENCES interviews(id) ON DELETE CASCADE,
+            user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+            guest_id TEXT NOT NULL DEFAULT '',
+            participant_name TEXT NOT NULL DEFAULT '',
+            joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            current_room TEXT NOT NULL DEFAULT 'group' CHECK (current_room IN ('group', 'individual')),
+            UNIQUE (interview_id, user_id)
+        );
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS interview_signals (
+            id TEXT PRIMARY KEY,
+            interview_id TEXT NOT NULL REFERENCES interviews(id) ON DELETE CASCADE,
+            sender_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+            sender_client_id TEXT NOT NULL,
+            sender_name TEXT NOT NULL DEFAULT '',
+            target_client_id TEXT,
+            type TEXT NOT NULL,
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await query(`
+        ALTER TABLE interview_participants
+        ALTER COLUMN user_id DROP NOT NULL;
+    `);
+
+    await query(`
+        ALTER TABLE interview_participants
+        ADD COLUMN IF NOT EXISTS guest_id TEXT NOT NULL DEFAULT '';
+    `);
+
+    await query(`
+        ALTER TABLE interview_participants
+        ADD COLUMN IF NOT EXISTS participant_name TEXT NOT NULL DEFAULT '';
+    `);
+
+    await query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS interview_participants_guest_unique
+        ON interview_participants (interview_id, guest_id)
+        WHERE guest_id <> '';
+    `);
+
+    await query(`
+        ALTER TABLE interview_signals
+        ALTER COLUMN sender_user_id DROP NOT NULL;
+    `);
+
+    await query(`
+        ALTER TABLE interview_signals
+        ADD COLUMN IF NOT EXISTS sender_name TEXT NOT NULL DEFAULT '';
+    `);
+
+    await query(`
         ALTER TABLE questions
         ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'mcq';
     `);
@@ -542,6 +623,11 @@ export const initDb = async () => {
     await query('CREATE INDEX IF NOT EXISTS idx_attempt_logs_attempt_id ON attempt_logs(attempt_id);');
     await query('CREATE INDEX IF NOT EXISTS idx_attempt_evidence_attempt_id ON attempt_evidence(attempt_id);');
     await query('CREATE INDEX IF NOT EXISTS idx_attempt_evidence_captured_at ON attempt_evidence(captured_at DESC);');
+    await query('CREATE INDEX IF NOT EXISTS idx_interviews_org_id ON interviews(org_id);');
+    await query('CREATE UNIQUE INDEX IF NOT EXISTS idx_interviews_code_unique ON interviews(interview_code);');
+    await query('CREATE INDEX IF NOT EXISTS idx_interview_participants_interview_id ON interview_participants(interview_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_interview_signals_interview_id_created_at ON interview_signals(interview_id, created_at);');
+    await query('CREATE INDEX IF NOT EXISTS idx_interview_signals_target_client_id ON interview_signals(target_client_id);');
 };
 
 export const closeDb = async () => {
