@@ -24,6 +24,7 @@ const MAX_CODE_TEST_CASES = 20;
 const MAX_CODE_TEST_CASE_INPUT_BYTES = 4000;
 const MAX_CODE_TEST_CASE_OUTPUT_BYTES = 4000;
 const MAX_BULK_IMPORT_QUESTIONS = 200;
+const MAX_SIGNAL_PAYLOAD_BYTES = 200_000;
 const rateLimitStore = new Map();
 const DEFAULT_TEST_SECURITY_SETTINGS = {
     webcam: true,
@@ -270,6 +271,14 @@ const uniqueAssignmentCode = async (client) => {
     }
 };
 
+const uniqueInterviewCode = async (client) => {
+    while (true) {
+        const code = `INT-${randomBytes(3).toString('hex').toUpperCase()}`;
+        const { rowCount } = await client.query('SELECT 1 FROM interviews WHERE interview_code = $1 LIMIT 1', [code]);
+        if (rowCount === 0) return code;
+    }
+};
+
 const normalizeAllowedEmails = (emails) => {
     if (!Array.isArray(emails)) return [];
 
@@ -350,6 +359,55 @@ const parseTestWindowInput = (startValue, endValue) => {
     }
 
     return { startAt, endAt };
+};
+
+const parseInterviewDateTime = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) throw new HttpError(400, 'Interview date and time is required.');
+
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+        throw new HttpError(400, 'Valid interview date and time is required.');
+    }
+
+    return parsed.toISOString();
+};
+
+const normalizeInterviewStatus = (value, fallback = 'scheduled') => {
+    const status = String(value || fallback).trim().toLowerCase();
+    return ['scheduled', 'live', 'completed', 'cancelled'].includes(status) ? status : fallback;
+};
+
+const normalizeInterviewRoomMode = (value, fallback = 'group') => {
+    const mode = String(value || fallback).trim().toLowerCase();
+    return mode === 'individual' ? 'individual' : 'group';
+};
+
+const normalizeSignalType = (value) => {
+    const type = String(value || '').trim().toLowerCase();
+    const allowed = new Set(['peer-joined', 'peer-left', 'offer', 'answer', 'ice-candidate', 'media-state']);
+    if (!allowed.has(type)) throw new HttpError(400, 'Invalid signaling message type.');
+    return type;
+};
+
+const normalizeClientId = (value) => {
+    const clientId = String(value || '').trim().slice(0, 128);
+    if (!clientId) throw new HttpError(400, 'Client id is required.');
+    return clientId;
+};
+
+const normalizeParticipantName = (value, fallback = 'Participant') => {
+    const name = String(value || '').trim().slice(0, 120);
+    return name || fallback;
+};
+
+const normalizeSignalPayload = (value) => {
+    const payload = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const serialized = JSON.stringify(payload);
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_SIGNAL_PAYLOAD_BYTES) {
+        throw new HttpError(413, 'Signaling payload is too large.');
+    }
+    return serialized;
 };
 
 const parseNegativeMarkValue = (value, fallback = 0) => {
@@ -476,6 +534,46 @@ const mapAttemptRow = (row) => ({
     last_heartbeat_at: row.last_heartbeat_at instanceof Date ? row.last_heartbeat_at.toISOString() : row.last_heartbeat_at,
     expires_at: row.expires_at instanceof Date ? row.expires_at.toISOString() : row.expires_at,
     submitted_at: row.submitted_at instanceof Date ? row.submitted_at.toISOString() : row.submitted_at,
+});
+
+const mapInterviewRow = (row) => ({
+    id: row.id,
+    org_id: row.org_id,
+    title: row.title,
+    candidate_name: row.candidate_name ?? '',
+    candidate_email: row.candidate_email ?? '',
+    description: row.description ?? '',
+    scheduled_at: row.scheduled_at instanceof Date ? row.scheduled_at.toISOString() : row.scheduled_at,
+    duration_minutes: Number(row.duration_minutes ?? 45),
+    meeting_url: '',
+    interview_code: row.interview_code,
+    allow_screen_share: Boolean(row.allow_screen_share),
+    enable_integrity_monitoring: Boolean(row.enable_integrity_monitoring),
+    room_mode: row.room_mode ?? 'group',
+    status: row.status ?? 'scheduled',
+    participant_count: Number(row.participant_count ?? 0),
+    created_by: row.created_by,
+    creator_name: row.creator_name ?? '',
+    created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+    updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+});
+
+const mapStudentInterviewRow = (row) => {
+    const interview = mapInterviewRow(row);
+    delete interview.interview_code;
+    return interview;
+};
+
+const mapInterviewSignalRow = (row) => ({
+    id: row.id,
+    interview_id: row.interview_id,
+    sender_user_id: row.sender_user_id,
+    sender_client_id: row.sender_client_id,
+    sender_name: row.sender_name ?? '',
+    target_client_id: row.target_client_id ?? null,
+    type: row.type,
+    payload: row.payload ?? {},
+    created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
 });
 
 const getAttemptOrThrow = async (attemptId) => {
@@ -644,6 +742,12 @@ const requireOrgManager = async (user, orgId) => {
 const getTestOrThrow = async (testId) => {
     const { rows } = await query('SELECT * FROM tests WHERE id = $1 LIMIT 1', [testId]);
     if (rows.length === 0) throw new HttpError(404, 'Test not found.');
+    return rows[0];
+};
+
+const getInterviewOrThrow = async (interviewId) => {
+    const { rows } = await query('SELECT * FROM interviews WHERE id = $1 LIMIT 1', [interviewId]);
+    if (rows.length === 0) throw new HttpError(404, 'Interview not found.');
     return rows[0];
 };
 
@@ -1590,6 +1694,327 @@ export const handleRequest = async (req, res) => {
         return;
     }
 
+    match = pathname.match(/^\/api\/orgs\/([^/]+)\/interviews$/);
+    if (match) {
+        const { user } = await requireAuth(req);
+        const orgId = decodeURIComponent(match[1]);
+        await requireSubAdmin(user.id, orgId);
+
+        if (req.method === 'GET') {
+            const { rows } = await query(`
+                SELECT
+                    i.*,
+                    u.name AS creator_name,
+                    COUNT(ip.id)::int AS participant_count
+                FROM interviews i
+                LEFT JOIN users u ON u.id = i.created_by
+                LEFT JOIN interview_participants ip ON ip.interview_id = i.id
+                WHERE i.org_id = $1
+                GROUP BY i.id, u.name
+                ORDER BY i.scheduled_at DESC, i.created_at DESC
+            `, [orgId]);
+
+            sendJson(req, res, 200, { interviews: rows.map(mapInterviewRow) });
+            return;
+        }
+
+        if (req.method === 'POST') {
+            const title = String(body.title || '').trim();
+            if (!title) throw new HttpError(400, 'Interview title is required.');
+
+            const scheduledAt = parseInterviewDateTime(body.scheduledAt ?? body.scheduled_at);
+            const durationMinutes = Math.min(480, Math.max(15, Number(body.durationMinutes ?? body.duration_minutes ?? 45)));
+            const candidateName = String(body.candidateName ?? body.candidate_name ?? '').trim().slice(0, 160);
+            const candidateEmail = String(body.candidateEmail ?? body.candidate_email ?? '').trim().toLowerCase().slice(0, 254);
+            const description = String(body.description || '').trim().slice(0, 3000);
+            const meetingUrl = '';
+            const allowScreenShare = Boolean(body.allowScreenShare ?? body.allow_screen_share);
+            const enableIntegrityMonitoring = body.enableIntegrityMonitoring !== undefined || body.enable_integrity_monitoring !== undefined
+                ? Boolean(body.enableIntegrityMonitoring ?? body.enable_integrity_monitoring)
+                : true;
+            const roomMode = normalizeInterviewRoomMode(body.roomMode ?? body.room_mode);
+            const status = normalizeInterviewStatus(body.status);
+            const requestIp = getRequestIp(req);
+
+            const interview = await transaction(async (client) => {
+                const interviewId = randomUUID();
+                const interviewCode = await uniqueInterviewCode(client);
+                const { rows } = await client.query(`
+                    INSERT INTO interviews (
+                        id, org_id, title, candidate_name, candidate_email, description,
+                        scheduled_at, duration_minutes, meeting_url, interview_code,
+                        allow_screen_share, enable_integrity_monitoring, room_mode, status,
+                        created_by, created_at, updated_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16)
+                    RETURNING *
+                `, [
+                    interviewId,
+                    orgId,
+                    title,
+                    candidateName,
+                    candidateEmail,
+                    description,
+                    scheduledAt,
+                    durationMinutes,
+                    meetingUrl,
+                    interviewCode,
+                    allowScreenShare,
+                    enableIntegrityMonitoring,
+                    roomMode,
+                    status,
+                    user.id,
+                    now(),
+                ]);
+
+                await insertAuditLog(client, {
+                    orgId,
+                    actorUserId: user.id,
+                    action: 'interview.created',
+                    entityType: 'interview',
+                    entityId: interviewId,
+                    metadata: { title, candidateEmail, scheduledAt, durationMinutes, roomMode, status, allowScreenShare, enableIntegrityMonitoring },
+                    ipAddress: requestIp,
+                });
+
+                return rows[0];
+            });
+
+            sendJson(req, res, 201, { interview: mapInterviewRow(interview) });
+            return;
+        }
+    }
+
+    match = pathname.match(/^\/api\/interviews\/code\/([^/]+)$/);
+    if (req.method === 'GET' && match) {
+        const interviewCode = decodeURIComponent(match[1]).trim().toUpperCase();
+        const { rows } = await query(`
+            SELECT
+                i.*,
+                u.name AS creator_name,
+                COUNT(ip.id)::int AS participant_count
+            FROM interviews i
+            LEFT JOIN users u ON u.id = i.created_by
+            LEFT JOIN interview_participants ip ON ip.interview_id = i.id
+            WHERE UPPER(i.interview_code) = $1
+            GROUP BY i.id, u.name
+            LIMIT 1
+        `, [interviewCode]);
+
+        if (rows.length === 0) throw new HttpError(404, 'Interview not found.');
+        sendJson(req, res, 200, { interview: mapInterviewRow(rows[0]) });
+        return;
+    }
+
+    match = pathname.match(/^\/api\/interviews\/([^/]+)\/join$/);
+    if (req.method === 'POST' && match) {
+        const { user } = await getAuth(req);
+        const interviewId = decodeURIComponent(match[1]);
+        const interview = await getInterviewOrThrow(interviewId);
+
+        const clientId = normalizeClientId(body.clientId ?? body.client_id);
+        const participantName = normalizeParticipantName(body.displayName ?? body.display_name, user?.name || user?.email || 'Participant');
+
+        const joined = await transaction(async (client) => {
+            const participantId = randomUUID();
+            const joinedAt = now();
+            if (!user) {
+                const { rows } = await client.query(`
+                    INSERT INTO interview_participants (
+                        id, interview_id, user_id, guest_id, participant_name,
+                        joined_at, last_seen_at, current_room
+                    )
+                    VALUES ($1, $2, NULL, $3, $4, $5, $5, $6)
+                    ON CONFLICT (interview_id, guest_id)
+                    WHERE guest_id <> ''
+                    DO UPDATE SET
+                        participant_name = EXCLUDED.participant_name,
+                        last_seen_at = EXCLUDED.last_seen_at,
+                        current_room = EXCLUDED.current_room
+                    RETURNING *
+                `, [participantId, interviewId, clientId, participantName, joinedAt, interview.room_mode]);
+                return rows[0];
+            }
+
+            const { rows } = await client.query(`
+                INSERT INTO interview_participants (
+                    id, interview_id, user_id, guest_id, participant_name,
+                    joined_at, last_seen_at, current_room
+                )
+                VALUES ($1, $2, $3, '', $4, $5, $5, $6)
+                ON CONFLICT (interview_id, user_id)
+                DO UPDATE SET
+                    participant_name = EXCLUDED.participant_name,
+                    last_seen_at = EXCLUDED.last_seen_at,
+                    current_room = EXCLUDED.current_room
+                RETURNING *
+            `, [participantId, interviewId, user.id, participantName, joinedAt, interview.room_mode]);
+            return rows[0];
+        });
+
+        sendJson(req, res, 200, {
+            participant: {
+                id: joined.id,
+                interview_id: joined.interview_id,
+                user_id: joined.user_id ?? null,
+                guest_id: joined.guest_id ?? '',
+                participant_name: joined.participant_name ?? '',
+                joined_at: joined.joined_at instanceof Date ? joined.joined_at.toISOString() : joined.joined_at,
+                current_room: joined.current_room,
+            },
+            interview: mapInterviewRow(interview),
+        });
+        return;
+    }
+
+    match = pathname.match(/^\/api\/interviews\/([^/]+)\/signals$/);
+    if (match) {
+        const { user } = await getAuth(req);
+        const interviewId = decodeURIComponent(match[1]);
+        await getInterviewOrThrow(interviewId);
+
+        if (req.method === 'GET') {
+            const clientId = normalizeClientId(url.searchParams.get('clientId'));
+            const sinceRaw = String(url.searchParams.get('since') || '').trim();
+            const since = sinceRaw && !Number.isNaN(new Date(sinceRaw).getTime())
+                ? new Date(sinceRaw).toISOString()
+                : new Date(Date.now() - 10 * 60 * 1000).toISOString();
+
+            await query(`
+                DELETE FROM interview_signals
+                WHERE interview_id = $1
+                  AND created_at < NOW() - INTERVAL '1 day'
+            `, [interviewId]);
+
+            const { rows } = await query(`
+                SELECT
+                    s.*,
+                    COALESCE(NULLIF(s.sender_name, ''), u.name, 'Participant') AS sender_name
+                FROM interview_signals s
+                LEFT JOIN users u ON u.id = s.sender_user_id
+                WHERE s.interview_id = $1
+                  AND s.sender_client_id <> $2
+                  AND (s.target_client_id IS NULL OR s.target_client_id = $2)
+                  AND s.created_at > $3
+                ORDER BY s.created_at ASC
+                LIMIT 150
+            `, [interviewId, clientId, since]);
+
+            sendJson(req, res, 200, {
+                server_time: now(),
+                signals: rows.map(mapInterviewSignalRow),
+            });
+            return;
+        }
+
+        if (req.method === 'POST') {
+            const clientId = normalizeClientId(body.clientId ?? body.client_id);
+            const targetClientIdRaw = String(body.targetClientId ?? body.target_client_id ?? '').trim();
+            const targetClientId = targetClientIdRaw ? targetClientIdRaw.slice(0, 128) : null;
+            const type = normalizeSignalType(body.type);
+            const payload = normalizeSignalPayload(body.payload);
+            const senderName = normalizeParticipantName(body.displayName ?? body.display_name, user?.name || user?.email || 'Participant');
+
+            const { rows } = await query(`
+                INSERT INTO interview_signals (
+                    id, interview_id, sender_user_id, sender_client_id,
+                    sender_name, target_client_id, type, payload, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+                RETURNING *
+            `, [randomUUID(), interviewId, user?.id ?? null, clientId, senderName, targetClientId, type, payload, now()]);
+
+            await query(`
+                DELETE FROM interview_signals
+                WHERE interview_id = $1
+                  AND created_at < NOW() - INTERVAL '1 day'
+            `, [interviewId]);
+
+            sendJson(req, res, 201, { signal: mapInterviewSignalRow(rows[0]) });
+            return;
+        }
+    }
+
+    match = pathname.match(/^\/api\/interviews\/([^/]+)$/);
+    if (match) {
+        const { user } = await requireAuth(req);
+        const interviewId = decodeURIComponent(match[1]);
+        const interview = await getInterviewOrThrow(interviewId);
+        await requireSubAdmin(user.id, interview.org_id);
+
+        if (req.method === 'PATCH') {
+            const requestIp = getRequestIp(req);
+            const scheduledAtProvided = body.scheduledAt !== undefined || body.scheduled_at !== undefined;
+            const updatedInterview = await transaction(async (client) => {
+                const { rows } = await client.query(`
+                    UPDATE interviews
+                    SET
+                        title = COALESCE($1, title),
+                        candidate_name = COALESCE($2, candidate_name),
+                        candidate_email = COALESCE($3, candidate_email),
+                        description = COALESCE($4, description),
+                        scheduled_at = COALESCE($5, scheduled_at),
+                        duration_minutes = COALESCE($6, duration_minutes),
+                        meeting_url = COALESCE($7, meeting_url),
+                        allow_screen_share = COALESCE($8, allow_screen_share),
+                        enable_integrity_monitoring = COALESCE($9, enable_integrity_monitoring),
+                        room_mode = COALESCE($10, room_mode),
+                        status = COALESCE($11, status),
+                        updated_at = $12
+                    WHERE id = $13
+                    RETURNING *
+                `, [
+                    body.title !== undefined ? String(body.title).trim() : null,
+                    body.candidateName !== undefined || body.candidate_name !== undefined ? String(body.candidateName ?? body.candidate_name ?? '').trim().slice(0, 160) : null,
+                    body.candidateEmail !== undefined || body.candidate_email !== undefined ? String(body.candidateEmail ?? body.candidate_email ?? '').trim().toLowerCase().slice(0, 254) : null,
+                    body.description !== undefined ? String(body.description).trim().slice(0, 3000) : null,
+                    scheduledAtProvided ? parseInterviewDateTime(body.scheduledAt ?? body.scheduled_at) : null,
+                    body.durationMinutes !== undefined || body.duration_minutes !== undefined ? Math.min(480, Math.max(15, Number(body.durationMinutes ?? body.duration_minutes))) : null,
+                    body.meetingUrl !== undefined || body.meeting_url !== undefined ? '' : null,
+                    body.allowScreenShare !== undefined || body.allow_screen_share !== undefined ? Boolean(body.allowScreenShare ?? body.allow_screen_share) : null,
+                    body.enableIntegrityMonitoring !== undefined || body.enable_integrity_monitoring !== undefined ? Boolean(body.enableIntegrityMonitoring ?? body.enable_integrity_monitoring) : null,
+                    body.roomMode !== undefined || body.room_mode !== undefined ? normalizeInterviewRoomMode(body.roomMode ?? body.room_mode, interview.room_mode) : null,
+                    body.status !== undefined ? normalizeInterviewStatus(body.status, interview.status) : null,
+                    now(),
+                    interviewId,
+                ]);
+
+                await insertAuditLog(client, {
+                    orgId: interview.org_id,
+                    actorUserId: user.id,
+                    action: 'interview.updated',
+                    entityType: 'interview',
+                    entityId: interviewId,
+                    metadata: { title: rows[0].title, status: rows[0].status, roomMode: rows[0].room_mode, allowScreenShare: rows[0].allow_screen_share, enableIntegrityMonitoring: rows[0].enable_integrity_monitoring },
+                    ipAddress: requestIp,
+                });
+
+                return rows[0];
+            });
+
+            sendJson(req, res, 200, { interview: mapInterviewRow(updatedInterview) });
+            return;
+        }
+
+        if (req.method === 'DELETE') {
+            const requestIp = getRequestIp(req);
+            await transaction(async (client) => {
+                await insertAuditLog(client, {
+                    orgId: interview.org_id,
+                    actorUserId: user.id,
+                    action: 'interview.deleted',
+                    entityType: 'interview',
+                    entityId: interviewId,
+                    metadata: { title: interview.title, interviewCode: interview.interview_code },
+                    ipAddress: requestIp,
+                });
+                await client.query('DELETE FROM interviews WHERE id = $1', [interviewId]);
+            });
+            sendJson(req, res, 200, { success: true });
+            return;
+        }
+    }
+
     if (req.method === 'GET' && pathname === '/api/student/tests') {
         await ensureNegativeMarkingColumns();
         const { user } = await requireAuth(req);
@@ -1623,6 +2048,32 @@ export const handleRequest = async (req, res) => {
                 { revealAnswers: Boolean(row.show_answers_after_exam) && submittedTestIds.has(row.id) },
             )),
         });
+        return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/student/interviews') {
+        const { user } = await requireAuth(req);
+        const email = String(user.email || '').trim().toLowerCase();
+        if (!email) {
+            sendJson(req, res, 200, { interviews: [] });
+            return;
+        }
+
+        const { rows } = await query(`
+            SELECT
+                i.*,
+                u.name AS creator_name,
+                COUNT(ip.id)::int AS participant_count
+            FROM interviews i
+            LEFT JOIN users u ON u.id = i.created_by
+            LEFT JOIN interview_participants ip ON ip.interview_id = i.id
+            WHERE LOWER(i.candidate_email) = $1
+              AND i.status <> 'cancelled'
+            GROUP BY i.id, u.name
+            ORDER BY i.scheduled_at ASC, i.created_at DESC
+        `, [email]);
+
+        sendJson(req, res, 200, { interviews: rows.map(mapStudentInterviewRow) });
         return;
     }
 

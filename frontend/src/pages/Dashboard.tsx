@@ -1,19 +1,41 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Layout/Navbar';
 import TestCard from '../components/Cards/TestCard';
-import { Search, ShieldCheck, BarChart2, Award, Shield } from 'lucide-react';
+import { Search, ShieldCheck, BarChart2, Award, Shield, CalendarClock, Video } from 'lucide-react';
 import { useTests } from '../context/TestContext';
 import { useOrg } from '../context/OrgContext';
 import { useResults } from '../context/ResultContext';
 import { useAuth } from '../context/AuthContext';
+import { apiRequest } from '../lib/api';
+
+type InterviewStatus = 'scheduled' | 'live' | 'completed' | 'cancelled';
+type RoomMode = 'group' | 'individual';
+
+interface StudentInterview {
+    id: string;
+    title: string;
+    candidate_name: string;
+    candidate_email: string;
+    description: string;
+    scheduled_at: string;
+    duration_minutes: number;
+    allow_screen_share: boolean;
+    enable_integrity_monitoring: boolean;
+    room_mode: RoomMode;
+    status: InterviewStatus;
+}
 
 const Dashboard: React.FC = () => {
+    const navigate = useNavigate();
     const { tests } = useTests();
     const { activeOrg } = useOrg();
     const { user } = useAuth();
     const { getStudentSubmissions } = useResults();
     const [search, setSearch] = useState('');
     const [activeTab, setActiveTab] = useState<'Active' | 'Upcoming' | 'Completed'>('Active');
+    const [interviews, setInterviews] = useState<StudentInterview[]>([]);
+    const [interviewCodes, setInterviewCodes] = useState<Record<string, string>>({});
 
     const formatDateTime = (value?: string | null) => {
         if (!value) return 'Not scheduled';
@@ -35,6 +57,24 @@ const Dashboard: React.FC = () => {
         return new Date(test.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
     };
 
+    useEffect(() => {
+        if (!user?.email) {
+            setInterviews([]);
+            return;
+        }
+
+        const loadInterviews = async () => {
+            try {
+                const data = await apiRequest<{ interviews: StudentInterview[] }>('/student/interviews');
+                setInterviews(data.interviews ?? []);
+            } catch {
+                setInterviews([]);
+            }
+        };
+
+        void loadInterviews();
+    }, [user?.email]);
+
     const mySubmissions = user ? getStudentSubmissions(user.id) : [];
     const completedTestIds = new Set(mySubmissions.map((s) => s.testId));
 
@@ -48,6 +88,7 @@ const Dashboard: React.FC = () => {
 
     const STATS = [
         { icon: ShieldCheck, label: 'Assigned Exams', value: String(assignedExamCount), sub: 'Available to you' },
+        { icon: CalendarClock, label: 'Interviews', value: String(interviews.length), sub: 'Assigned to your email' },
         { icon: ShieldCheck, label: 'Avg Integrity', value: mySubmissions.length ? `${Math.round(avgIntegrity)}%` : '-', sub: 'All time' },
         { icon: Award, label: 'Avg Score', value: mySubmissions.length ? `${avgScore.toFixed(0)}%` : '-', sub: 'Across tests' },
         { icon: BarChart2, label: 'Completed', value: String(mySubmissions.length), sub: 'Assessments' },
@@ -116,6 +157,18 @@ const Dashboard: React.FC = () => {
     };
 
     const visible = getVisibleTests();
+    const visibleInterviews = interviews.filter((interview) => {
+        const query = search.trim().toLowerCase();
+        if (!query) return true;
+        return interview.title.toLowerCase().includes(query)
+            || interview.description.toLowerCase().includes(query);
+    });
+
+    const joinInterview = (interviewId: string) => {
+        const code = (interviewCodes[interviewId] || '').trim();
+        if (!code) return;
+        navigate(`/interview/${encodeURIComponent(code)}`);
+    };
 
     return (
         <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
@@ -130,7 +183,7 @@ const Dashboard: React.FC = () => {
                         {activeOrg?.name ?? 'Your Exam Dashboard'}
                     </h1>
                     <p className="t-body" style={{ maxWidth: '480px' }}>
-                        Exams assigned to your email appear here. If none are available, this dashboard shows 0 assigned exams.
+                        Exams and interviews assigned to your email appear here. If none are available, this dashboard shows 0 assigned items.
                     </p>
                 </section>
 
@@ -156,7 +209,7 @@ const Dashboard: React.FC = () => {
                             id="search-input"
                             type="text"
                             className="input"
-                            placeholder="Search exams by name or tag..."
+                            placeholder="Search exams or interviews..."
                             style={{ paddingLeft: '2.5rem' }}
                             value={search}
                             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
@@ -185,6 +238,70 @@ const Dashboard: React.FC = () => {
                         </div>
 
                     </div>
+                </section>
+
+                <section className="anim-fade-up" style={{ marginBottom: '2rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', marginBottom: '0.85rem', flexWrap: 'wrap' }}>
+                        <div>
+                            <h2 className="t-h3">Assigned Interviews</h2>
+                            <p className="t-small" style={{ color: 'var(--text-muted)' }}>
+                                {visibleInterviews.length} interview{visibleInterviews.length === 1 ? '' : 's'} found for {user?.email ?? 'your email'}
+                            </p>
+                        </div>
+                    </div>
+
+                    {visibleInterviews.length > 0 ? (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.75rem' }}>
+                            {visibleInterviews.map((interview) => (
+                                <div key={interview.id} className="card hover-antigravity" style={{ padding: '1rem', display: 'grid', gap: '0.8rem' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
+                                        <div style={{ minWidth: 0 }}>
+                                            <p className="t-micro" style={{ color: 'var(--text-muted)', marginBottom: '0.3rem' }}>Interview</p>
+                                            <h3 className="t-h3" style={{ overflowWrap: 'anywhere' }}>{interview.title}</h3>
+                                        </div>
+                                        <span className={`badge ${interview.status === 'live' ? 'badge-success' : interview.status === 'completed' ? 'badge-neutral' : 'badge-warning'}`}>
+                                            {interview.status}
+                                        </span>
+                                    </div>
+
+                                    <div style={{ display: 'grid', gap: '0.35rem' }}>
+                                        <p className="t-small" style={{ color: 'var(--text-2)', fontWeight: 800 }}>
+                                            <CalendarClock size={13} style={{ display: 'inline', verticalAlign: '-2px', marginRight: 5 }} />
+                                            {formatDateTime(interview.scheduled_at)}
+                                        </p>
+                                        <p className="t-small" style={{ color: 'var(--text-muted)' }}>
+                                            {interview.duration_minutes} minutes - {interview.room_mode === 'individual' ? 'Individual room' : 'Shared video room'}
+                                        </p>
+                                    </div>
+
+                                    {interview.description && (
+                                        <p className="t-small" style={{ color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{interview.description}</p>
+                                    )}
+
+                                    <div style={{ display: 'grid', gap: '0.5rem' }}>
+                                        <input
+                                            className="input t-mono"
+                                            value={interviewCodes[interview.id] ?? ''}
+                                            onChange={event => setInterviewCodes(prev => ({ ...prev, [interview.id]: event.target.value }))}
+                                            placeholder="Enter interview code"
+                                            aria-label={`Interview code for ${interview.title}`}
+                                        />
+                                        <button
+                                            className="btn btn-sm btn-primary"
+                                            onClick={() => joinInterview(interview.id)}
+                                            disabled={!interviewCodes[interview.id]?.trim()}
+                                        >
+                                            <Video size={14} /> Join Interview
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="card" style={{ padding: '1.25rem', color: 'var(--text-muted)' }}>
+                            <p className="t-small">No interviews are assigned to your email right now.</p>
+                        </div>
+                    )}
                 </section>
 
                 <div className="anim-fade-up" style={{ marginBottom: '1rem' }}>

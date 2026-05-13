@@ -28,6 +28,7 @@ import SuperAdminAdminDetails from './pages/superadmin/SuperAdminAdminDetails';
 import SubAdminOverview from './pages/subadmin/SubAdminOverview';
 import AssignmentManagement from './pages/shared/AssignmentManagement';
 import InterviewManagement from './pages/shared/InterviewManagement';
+import InterviewJoin from './pages/shared/InterviewJoin';
 import RecentActivity from './pages/shared/RecentActivity';
 import Login from './pages/auth/Login';
 import Signup from './pages/auth/Signup';
@@ -83,6 +84,11 @@ function App() {
                                             </ProtectedRoute>
                                         }
                                     />
+                                    <Route
+                                        path="/interview/:code"
+                                        element={<InterviewJoin />}
+                                    />
+
                                     <Route
                                         path="/progress"
                                         element={
