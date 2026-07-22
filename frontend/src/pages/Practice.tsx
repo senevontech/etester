@@ -160,12 +160,27 @@ const Practice: React.FC = () => {
     }, [questions, sessions]);
 
     const startPractice = () => {
+        if (loading) {
+            setError('Practice questions are still loading. Please try again in a moment.');
+            return;
+        }
+
         const selected = filteredQuestions.slice(0, PRACTICE_LIMIT);
+        if (selected.length === 0) {
+            setError(
+                questions.length === 0
+                    ? 'No practice questions are available yet. Ask an admin or subadmin to publish a test and enable Student Practice.'
+                    : 'No questions match your current search or category filter.'
+            );
+            return;
+        }
+
         const initialAnswers = Object.fromEntries(selected.map((question) => [question.id, createInitialAnswer(question)]));
         setActiveQuestions(selected);
         setAnswers(initialAnswers);
         setStartedAt(new Date().toISOString());
         setResult(null);
+        setError('');
         setRunLogs({});
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
@@ -309,8 +324,8 @@ const Practice: React.FC = () => {
                                             <option key={item} value={item}>{item === 'all' ? 'All categories' : QUESTION_CATEGORY_LABELS[item]}</option>
                                         ))}
                                     </select>
-                                    <button className="btn btn-md btn-primary" style={{ gap: '0.45rem', whiteSpace: 'nowrap' }} onClick={startPractice} disabled={filteredQuestions.length === 0 || loading}>
-                                        <Play size={15} /> Start
+                                    <button className="btn btn-md btn-primary" style={{ gap: '0.45rem', whiteSpace: 'nowrap' }} onClick={startPractice} disabled={loading}>
+                                        <Play size={15} /> {filteredQuestions.length > 0 ? `Start (${Math.min(filteredQuestions.length, PRACTICE_LIMIT)})` : 'Start'}
                                     </button>
                                 </div>
                             </div>
