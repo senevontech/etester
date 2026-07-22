@@ -31,6 +31,7 @@ export interface Test {
     negativeMarkingEnabled: boolean;
     negativeMarkValue: number;
     showAnswersAfterExam: boolean;
+    practiceEnabled: boolean;
     allowedEmails: string[];
     hasAccessCode: boolean;
     accessCode: string | null;
@@ -46,7 +47,7 @@ interface TestContextValue {
     tests: Test[];
     loading: boolean;
     getTest: (id: string) => Test | undefined;
-    createTest: (data: Omit<Test, 'id' | 'createdAt' | 'questions' | 'published' | 'allowedEmails' | 'hasAccessCode' | 'accessCode' | 'securitySettings' | 'created_by' | 'org_id'>) => Promise<Test | null>;
+    createTest: (data: Omit<Test, 'id' | 'createdAt' | 'questions' | 'published' | 'practiceEnabled' | 'allowedEmails' | 'hasAccessCode' | 'accessCode' | 'securitySettings' | 'created_by' | 'org_id'>) => Promise<Test | null>;
     updateTest: (id: string, data: Partial<Omit<Test, 'id' | 'createdAt' | 'questions' | 'allowedEmails' | 'hasAccessCode' | 'accessCode' | 'org_id'>>) => Promise<void>;
     deleteTest: (id: string) => Promise<void>;
     publishTest: (id: string, options?: { allowedEmails: string[] }) => Promise<void>;
@@ -73,6 +74,7 @@ const rowToQuestion = (q: any): Question => {
             options: q.options ?? [],
             answer: typeof q.answer === 'number' ? q.answer : undefined,
             points: q.points,
+            practiceEnabled: q.practice_enabled !== undefined ? Boolean(q.practice_enabled) : q.practiceEnabled !== undefined ? Boolean(q.practiceEnabled) : true,
         };
     }
 
@@ -87,6 +89,7 @@ const rowToQuestion = (q: any): Question => {
             acceptedAnswers: q.accepted_answers ?? q.acceptedAnswers ?? [],
             caseSensitive: Boolean(q.case_sensitive ?? q.caseSensitive),
             points: q.points,
+            practiceEnabled: q.practice_enabled !== undefined ? Boolean(q.practice_enabled) : q.practiceEnabled !== undefined ? Boolean(q.practiceEnabled) : true,
         } satisfies TextQuestion;
     }
 
@@ -101,6 +104,7 @@ const rowToQuestion = (q: any): Question => {
             answer: typeof q.numeric_answer === 'number' ? q.numeric_answer : undefined,
             tolerance: typeof q.numeric_tolerance === 'number' ? q.numeric_tolerance : Number(q.numeric_tolerance ?? 0) || 0,
             points: q.points,
+            practiceEnabled: q.practice_enabled !== undefined ? Boolean(q.practice_enabled) : q.practiceEnabled !== undefined ? Boolean(q.practiceEnabled) : true,
         } satisfies NumericQuestion;
     }
 
@@ -117,6 +121,7 @@ const rowToQuestion = (q: any): Question => {
         examples: q.examples ?? [],
         testCases: q.test_cases ?? q.testCases ?? [],
         points: q.points,
+        practiceEnabled: q.practice_enabled !== undefined ? Boolean(q.practice_enabled) : q.practiceEnabled !== undefined ? Boolean(q.practiceEnabled) : true,
     } satisfies CodeQuestion;
 };
 
@@ -139,6 +144,7 @@ const rowToTest = (row: any): Test => ({
     negativeMarkingEnabled: Boolean(row.negative_marking_enabled ?? row.negativeMarkingEnabled),
     negativeMarkValue: Number(row.negative_mark_value ?? row.negativeMarkValue ?? 0),
     showAnswersAfterExam: Boolean(row.show_answers_after_exam ?? row.showAnswersAfterExam),
+    practiceEnabled: Boolean(row.practice_enabled ?? row.practiceEnabled),
     allowedEmails: row.allowed_emails ?? row.allowedEmails ?? [],
     hasAccessCode: Boolean(row.has_access_code ?? row.hasAccessCode ?? row.access_code),
     accessCode: row.access_code ?? row.accessCode ?? null,
@@ -211,7 +217,7 @@ export const TestProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const getTest = useCallback((id: string) => tests.find(test => test.id === id), [tests]);
 
     const createTest = useCallback(async (
-        data: Omit<Test, 'id' | 'createdAt' | 'questions' | 'published' | 'allowedEmails' | 'hasAccessCode' | 'accessCode' | 'securitySettings' | 'created_by' | 'org_id'>
+        data: Omit<Test, 'id' | 'createdAt' | 'questions' | 'published' | 'practiceEnabled' | 'allowedEmails' | 'hasAccessCode' | 'accessCode' | 'securitySettings' | 'created_by' | 'org_id'>
     ): Promise<Test | null> => {
         if (!activeOrgId || !userId) return null;
 
@@ -239,6 +245,7 @@ export const TestProvider: React.FC<{ children: React.ReactNode }> = ({ children
             negativeMarkingEnabled: rest.negativeMarkingEnabled,
             negativeMarkValue: rest.negativeMarkValue,
             showAnswersAfterExam: rest.showAnswersAfterExam,
+            practiceEnabled: rest.practiceEnabled,
             startAt: rest.startAt,
             endAt: rest.endAt,
             securitySettings: rest.securitySettings

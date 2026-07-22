@@ -19,6 +19,7 @@ interface BaseQuestion {
     description: string;
     imageUrl?: string;
     points: number;
+    practiceEnabled?: boolean;
 }
 
 export interface McqQuestion extends BaseQuestion {
@@ -65,6 +66,7 @@ export interface Test {
     negativeMarkingEnabled: boolean;
     negativeMarkValue: number;
     showAnswersAfterExam: boolean;
+    practiceEnabled?: boolean;
     allowedEmails?: string[];
     hasAccessCode?: boolean;
     accessCode?: string | null;

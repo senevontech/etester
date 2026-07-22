@@ -8,6 +8,7 @@ import ProtectedRoute from './components/Auth/ProtectedRoute';
 
 import Dashboard from './pages/Dashboard';
 import Progress from './pages/Progress';
+import Practice from './pages/Practice';
 import TestRoom from './pages/TestRoom';
 import PreTestGate from './pages/PreTestGate';
 import SubAdminDashboard from './pages/subadmin/SubAdminDashboard';
@@ -94,6 +95,14 @@ function App() {
                                         element={
                                             <ProtectedRoute requiredRole="student">
                                                 <Progress />
+                                            </ProtectedRoute>
+                                        }
+                                    />
+                                    <Route
+                                        path="/practice"
+                                        element={
+                                            <ProtectedRoute requiredRole="student">
+                                                <Practice />
                                             </ProtectedRoute>
                                         }
                                     />

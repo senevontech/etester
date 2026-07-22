@@ -24,6 +24,7 @@ const MAX_CODE_TEST_CASES = 20;
 const MAX_CODE_TEST_CASE_INPUT_BYTES = 4000;
 const MAX_CODE_TEST_CASE_OUTPUT_BYTES = 4000;
 const MAX_BULK_IMPORT_QUESTIONS = 200;
+const MAX_PRACTICE_SESSION_QUESTIONS = 50;
 const MAX_SIGNAL_PAYLOAD_BYTES = 200_000;
 const rateLimitStore = new Map();
 const DEFAULT_TEST_SECURITY_SETTINGS = {
@@ -460,6 +461,7 @@ const mapQuestionRow = (row) => ({
     constraints: row.constraints ?? null,
     examples: row.examples ?? null,
     test_cases: row.test_cases ?? null,
+    practice_enabled: row.practice_enabled !== undefined ? Boolean(row.practice_enabled) : true,
     created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
 });
 
@@ -504,6 +506,7 @@ const mapTestRow = (row, questions = [], role = 'subadmin', options: { revealAns
     negative_marking_enabled: Boolean(row.negative_marking_enabled),
     negative_mark_value: Number(row.negative_mark_value ?? 0),
     show_answers_after_exam: Boolean(row.show_answers_after_exam),
+    practice_enabled: Boolean(row.practice_enabled),
     allowed_emails: normalizeAllowedEmails(row.allowed_emails),
     security_settings: normalizeTestSecuritySettings(row.security_settings),
     has_access_code: Boolean(row.access_code),
@@ -525,6 +528,32 @@ const mapSubmissionRow = (row) => ({
     started_at: row.started_at instanceof Date ? row.started_at.toISOString() : row.started_at,
     expires_at: row.expires_at instanceof Date ? row.expires_at.toISOString() : row.expires_at,
 });
+
+const mapPracticeSessionRow = (row) => ({
+    ...row,
+    answers: row.answers ?? [],
+    score: Number(row.score ?? 0),
+    total_points: Number(row.total_points ?? 0),
+    question_count: Number(row.question_count ?? 0),
+    started_at: row.started_at instanceof Date ? row.started_at.toISOString() : row.started_at,
+    completed_at: row.completed_at instanceof Date ? row.completed_at.toISOString() : row.completed_at,
+});
+
+const serializePracticeQuestion = (row) => {
+    const question = mapQuestionRow(row);
+    const publicTestCases = question.type === 'code'
+        ? normalizeCodeTestCases(question.test_cases).filter((testCase) => !testCase.hidden)
+        : question.test_cases;
+
+    return {
+        ...question,
+        test_id: row.test_id,
+        test_title: row.test_title,
+        org_id: row.org_id,
+        test_tags: row.test_tags ?? [],
+        test_cases: publicTestCases,
+    };
+};
 
 const mapAuditLogRow = (row) => ({
     ...row,
@@ -810,6 +839,9 @@ const normalizeQuestionInput = (question, position) => ({
     constraints: question.type === 'code' ? JSON.stringify(question.constraints ?? []) : null,
     examples: question.type === 'code' ? JSON.stringify(question.examples ?? []) : null,
     test_cases: question.type === 'code' ? JSON.stringify(normalizeCodeTestCases(question.test_cases ?? question.testCases)) : null,
+    practice_enabled: question.practice_enabled !== undefined || question.practiceEnabled !== undefined
+        ? Boolean(question.practice_enabled ?? question.practiceEnabled)
+        : true,
     created_at: now(),
 });
 
@@ -818,12 +850,12 @@ const insertQuestionRow = async (client, question) => {
         INSERT INTO questions (
             id, test_id, type, category, title, description, image_url, points, position,
             options, answer, accepted_answers, case_sensitive, numeric_answer, numeric_tolerance,
-            template, language, constraints, examples, test_cases, created_at
+            template, language, constraints, examples, test_cases, practice_enabled, created_at
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9,
             $10::jsonb, $11, $12::jsonb, $13, $14, $15,
-            $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21
+            $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21, $22
         )
         RETURNING *
     `, [
@@ -847,6 +879,7 @@ const insertQuestionRow = async (client, question) => {
         question.constraints,
         question.examples,
         question.test_cases,
+        question.practice_enabled,
         question.created_at,
     ]);
 
@@ -1060,6 +1093,81 @@ const buildSubmissionAnswers = async (questionRows, incomingAnswers, negativeMar
 
     return { answers, score, totalPoints };
 };
+
+const buildPracticeAnswers = async (questionRows, incomingAnswers) => {
+    const publicQuestionRows = questionRows.map((question) => {
+        if (question.type !== 'code') return question;
+
+        const publicCases = normalizeCodeTestCases(question.test_cases).filter((testCase) => !testCase.hidden);
+        return {
+            ...question,
+            test_cases: publicCases.length > 0 ? publicCases : [],
+        };
+    });
+
+    return buildSubmissionAnswers(publicQuestionRows, incomingAnswers, { enabled: false, value: 0 });
+};
+
+const getAccessiblePracticeQuestions = async (user, options: any = {}) => {
+    const questionIds = Array.isArray(options.questionIds)
+        ? Array.from(new Set(options.questionIds.map((id) => String(id || '').trim()).filter(Boolean))).slice(0, MAX_PRACTICE_SESSION_QUESTIONS)
+        : [];
+    const category = String(options.category || '').trim().toLowerCase();
+    const orgId = String(options.orgId || '').trim();
+
+    const params: any[] = [user.id];
+    const filters = [
+        'm.user_id = $1',
+        "m.role = 'student'",
+        't.published = TRUE',
+        't.practice_enabled = TRUE',
+        'q.practice_enabled = TRUE',
+    ];
+
+    if (questionIds.length > 0) {
+        params.push(questionIds);
+        filters.push(`q.id = ANY($${params.length}::text[])`);
+    }
+
+    if (category && category !== 'all') {
+        params.push(category);
+        filters.push(`q.category = $${params.length}`);
+    }
+
+    if (orgId) {
+        params.push(orgId);
+        filters.push(`t.org_id = $${params.length}`);
+    }
+
+    const { rows } = await query(`
+        SELECT
+            q.*,
+            t.title AS test_title,
+            t.org_id,
+            t.tags AS test_tags,
+            t.allowed_emails AS test_allowed_emails
+        FROM questions q
+        JOIN tests t ON t.id = q.test_id
+        JOIN org_members m ON m.org_id = t.org_id
+        WHERE ${filters.join(' AND ')}
+        ORDER BY t.created_at DESC, q.position ASC
+        LIMIT 300
+    `, params);
+
+    const emailFiltered = rows.filter((row) => testAllowsEmail({ allowed_emails: row.test_allowed_emails }, user.email));
+
+    if (questionIds.length === 0) return emailFiltered.map(mapQuestionRowWithPracticeMeta);
+
+    const byId = new Map(emailFiltered.map((row) => [row.id, row]));
+    return questionIds.map((id) => byId.get(id)).filter(Boolean).map(mapQuestionRowWithPracticeMeta);
+};
+
+const mapQuestionRowWithPracticeMeta = (row) => ({
+    ...mapQuestionRow(row),
+    test_title: row.test_title,
+    org_id: row.org_id,
+    test_tags: row.test_tags ?? [],
+});
 
 const normalizeIntegrityEvents = (incomingEvents) => {
     if (!Array.isArray(incomingEvents)) return [];
@@ -2086,6 +2194,134 @@ export const handleRequest = async (req, res) => {
         return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/student/practice') {
+        const { user } = await requireAuth(req);
+        if (user.global_role === 'admin' || user.global_role === 'superadmin') {
+            throw new HttpError(403, 'Practice is available only for student accounts.');
+        }
+
+        const category = url.searchParams.get('category') || '';
+        const orgId = url.searchParams.get('orgId') || '';
+        const questionRows = await getAccessiblePracticeQuestions(user, { category, orgId });
+
+        const { rows: sessionRows } = await query(`
+            SELECT
+                ps.*,
+                o.name AS org_name,
+                t.title AS test_title
+            FROM practice_sessions ps
+            LEFT JOIN organizations o ON o.id = ps.org_id
+            LEFT JOIN tests t ON t.id = ps.test_id
+            WHERE ps.student_id = $1
+              AND ($2::text = '' OR ps.org_id = $2)
+            ORDER BY ps.completed_at DESC
+            LIMIT 12
+        `, [user.id, orgId]);
+
+        sendJson(req, res, 200, {
+            questions: questionRows.map(serializePracticeQuestion),
+            sessions: sessionRows.map(mapPracticeSessionRow),
+        });
+        return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/practice/sessions') {
+        enforceRateLimit(req, 'practice-submit', { limit: 40, windowMs: 5 * 60 * 1000 });
+        const { user } = await requireAuth(req);
+        if (user.global_role === 'admin' || user.global_role === 'superadmin') {
+            throw new HttpError(403, 'Practice is available only for student accounts.');
+        }
+
+        const incomingAnswers = Array.isArray(body.answers) ? body.answers : [];
+        const questionIds = Array.from(new Set(
+            incomingAnswers
+                .map((answer) => String(answer?.questionId || '').trim())
+                .filter(Boolean)
+        )).slice(0, MAX_PRACTICE_SESSION_QUESTIONS);
+
+        if (questionIds.length === 0) throw new HttpError(400, 'At least one practice answer is required.');
+
+        const questionRows = await getAccessiblePracticeQuestions(user, {
+            questionIds,
+            orgId: body.orgId,
+        });
+
+        if (questionRows.length !== questionIds.length) {
+            throw new HttpError(403, 'One or more questions are no longer available for practice.');
+        }
+
+        const orgIds = new Set(questionRows.map((question) => question.org_id));
+        if (orgIds.size !== 1) {
+            throw new HttpError(400, 'A practice session can include questions from only one organization.');
+        }
+
+        const testIds = new Set(questionRows.map((question) => question.test_id));
+        const categories = new Set(questionRows.map((question) => question.category));
+        const { answers, score, totalPoints } = await buildPracticeAnswers(questionRows, incomingAnswers);
+        const completedAt = now();
+        const startedAt = body.startedAt && !Number.isNaN(new Date(body.startedAt).getTime())
+            ? new Date(body.startedAt).toISOString()
+            : completedAt;
+
+        const savedSession = await transaction(async (client) => {
+            const sessionId = randomUUID();
+            const sessionResult = await client.query(`
+                INSERT INTO practice_sessions (
+                    id, org_id, student_id, test_id, category, answers,
+                    score, total_points, question_count, started_at, completed_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11)
+                RETURNING *
+            `, [
+                sessionId,
+                Array.from(orgIds)[0],
+                user.id,
+                testIds.size === 1 ? Array.from(testIds)[0] : null,
+                categories.size === 1 ? Array.from(categories)[0] : null,
+                JSON.stringify(answers),
+                score,
+                totalPoints,
+                questionRows.length,
+                startedAt,
+                completedAt,
+            ]);
+
+            const incomingByQuestionId = new Map(
+                incomingAnswers
+                    .filter((answer) => answer && typeof answer === 'object')
+                    .map((answer) => [answer.questionId, answer])
+            );
+            for (const answer of answers) {
+                const raw: any = incomingByQuestionId.get(answer.questionId) ?? {};
+                await client.query(`
+                    INSERT INTO practice_answers (
+                        id, session_id, question_id, answer, is_correct,
+                        points_earned, time_spent_seconds, created_at
+                    )
+                    VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
+                `, [
+                    randomUUID(),
+                    sessionId,
+                    answer.questionId,
+                    JSON.stringify(answer),
+                    Number(answer.pointsEarned || 0) >= Number(questionRows.find((q) => q.id === answer.questionId)?.points || 0),
+                    Number(answer.pointsEarned || 0),
+                    Math.max(0, Math.min(24 * 60 * 60, Number(raw.timeSpentSeconds || raw.time_spent_seconds || 0))),
+                    completedAt,
+                ]);
+            }
+
+            return sessionResult.rows[0];
+        });
+
+        sendJson(req, res, 201, {
+            session: mapPracticeSessionRow(savedSession),
+            answers,
+            questions: questionRows.map(serializePracticeQuestion),
+        });
+        return;
+    }
+
     match = pathname.match(/^\/api\/tests\/([^/]+)\/assignments$/);
     if (req.method === 'POST' && match) {
         const { user } = await requireAuth(req);
@@ -2329,6 +2565,7 @@ export const handleRequest = async (req, res) => {
         const negativeMarkingEnabled = Boolean(body.negativeMarkingEnabled ?? body.negative_marking_enabled);
         const negativeMarkValue = parseNegativeMarkValue(body.negativeMarkValue ?? body.negative_mark_value);
         const showAnswersAfterExam = Boolean(body.showAnswersAfterExam ?? body.show_answers_after_exam);
+        const practiceEnabled = Boolean(body.practiceEnabled ?? body.practice_enabled);
         const allowedEmails = normalizeAllowedEmails(body.allowedEmails ?? body.allowed_emails);
         const securitySettings = normalizeTestSecuritySettings(body.securitySettings ?? body.security_settings);
         const accessCode = await transaction(async (client) => uniqueTestAccessCode(client));
@@ -2338,9 +2575,9 @@ export const handleRequest = async (req, res) => {
                 INSERT INTO tests (
                     id, org_id, title, description, duration, difficulty, tags, published,
                     negative_marking_enabled, negative_mark_value, show_answers_after_exam,
-                    allowed_emails, access_code, access_code_hash, security_settings, start_at, end_at, created_by, created_at
+                    practice_enabled, allowed_emails, access_code, access_code_hash, security_settings, start_at, end_at, created_by, created_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, FALSE, $8, $9, $10, $11::jsonb, $12, $13, $14::jsonb, $15, $16, $17, $18)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, FALSE, $8, $9, $10, $11, $12::jsonb, $13, $14, $15::jsonb, $16, $17, $18, $19)
                 RETURNING *
             `, [
                 testId,
@@ -2353,6 +2590,7 @@ export const handleRequest = async (req, res) => {
                 negativeMarkingEnabled,
                 negativeMarkValue,
                 showAnswersAfterExam,
+                practiceEnabled,
                 JSON.stringify(allowedEmails),
                 accessCode,
                 null,
@@ -2378,6 +2616,7 @@ export const handleRequest = async (req, res) => {
                     negativeMarkingEnabled,
                     negativeMarkValue,
                     showAnswersAfterExam,
+                    practiceEnabled,
                     allowedEmailCount: allowedEmails.length,
                     securitySettings,
                     hasAccessCode: Boolean(accessCode),
@@ -2424,6 +2663,10 @@ export const handleRequest = async (req, res) => {
             const showAnswersAfterExam = showAnswersProvided
                 ? Boolean(body.showAnswersAfterExam ?? body.show_answers_after_exam)
                 : null;
+            const practiceEnabledProvided = body.practiceEnabled !== undefined || body.practice_enabled !== undefined;
+            const practiceEnabled = practiceEnabledProvided
+                ? Boolean(body.practiceEnabled ?? body.practice_enabled)
+                : null;
             const shouldEnsureAccessCode = body.published === true && !test.access_code;
             const startAtProvided = body.startAt !== undefined || body.start_at !== undefined;
             const endAtProvided = body.endAt !== undefined || body.end_at !== undefined;
@@ -2468,8 +2711,9 @@ export const handleRequest = async (req, res) => {
                         security_settings = COALESCE($10::jsonb, security_settings),
                         negative_marking_enabled = COALESCE($11::boolean, negative_marking_enabled),
                         negative_mark_value = COALESCE($12::numeric, negative_mark_value),
-                        show_answers_after_exam = COALESCE($13::boolean, show_answers_after_exam)
-                    WHERE id = $14
+                        show_answers_after_exam = COALESCE($13::boolean, show_answers_after_exam),
+                        practice_enabled = COALESCE($14::boolean, practice_enabled)
+                    WHERE id = $15
                     RETURNING *
                 `, [
                     body.title !== undefined ? String(body.title).trim() : null,
@@ -2485,6 +2729,7 @@ export const handleRequest = async (req, res) => {
                     negativeMarkingEnabled,
                     negativeMarkValue,
                     showAnswersAfterExam,
+                    practiceEnabled,
                     testId,
                 ]);
 
@@ -2510,6 +2755,7 @@ export const handleRequest = async (req, res) => {
                         negativeMarkingEnabled: nextTest.negative_marking_enabled,
                         negativeMarkValue: nextTest.negative_mark_value,
                         showAnswersAfterExam: nextTest.show_answers_after_exam,
+                        practiceEnabled: nextTest.practice_enabled,
                         securitySettings: normalizeTestSecuritySettings(nextTest.security_settings),
                         allowedEmailCount: normalizeAllowedEmails(nextTest.allowed_emails).length,
                         hasAccessCode: Boolean(nextTest.access_code),
@@ -2841,8 +3087,9 @@ export const handleRequest = async (req, res) => {
                         language = CASE WHEN type = 'code' THEN COALESCE($13, language) ELSE language END,
                         constraints = CASE WHEN type = 'code' AND $14::jsonb IS NOT NULL THEN $14::jsonb ELSE constraints END,
                         examples = CASE WHEN type = 'code' AND $15::jsonb IS NOT NULL THEN $15::jsonb ELSE examples END,
-                        test_cases = CASE WHEN type = 'code' AND $16::jsonb IS NOT NULL THEN $16::jsonb ELSE test_cases END
-                    WHERE id = $17
+                        test_cases = CASE WHEN type = 'code' AND $16::jsonb IS NOT NULL THEN $16::jsonb ELSE test_cases END,
+                        practice_enabled = COALESCE($17::boolean, practice_enabled)
+                    WHERE id = $18
                     RETURNING *
                 `, [
                     body.title !== undefined ? String(body.title).trim() : null,
@@ -2872,6 +3119,9 @@ export const handleRequest = async (req, res) => {
                     body.examples !== undefined ? JSON.stringify(Array.isArray(body.examples) ? body.examples : []) : null,
                     body.test_cases !== undefined || body.testCases !== undefined
                         ? JSON.stringify(normalizeCodeTestCases(body.test_cases ?? body.testCases))
+                        : null,
+                    body.practice_enabled !== undefined || body.practiceEnabled !== undefined
+                        ? Boolean(body.practice_enabled ?? body.practiceEnabled)
                         : null,
                     questionId,
                 ]);

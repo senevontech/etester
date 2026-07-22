@@ -6,7 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useOrg } from '../../context/OrgContext';
 
 interface NavbarProps {
-    activeTab?: 'dashboard' | 'progress' | 'faq' | 'subadmin';
+    activeTab?: 'dashboard' | 'progress' | 'practice' | 'faq' | 'subadmin';
     overlay?: boolean;
 }
 
@@ -61,6 +61,9 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard', overlay = fals
                             </Link>
                             <Link to="/progress" style={{ padding: '0.375rem 0.75rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)', textDecoration: 'none', transition: 'all 0.15s ease' }}>
                                 My Progress
+                            </Link>
+                            <Link to="/practice" style={{ padding: '0.375rem 0.75rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 600, color: activeTab === 'practice' ? 'var(--text)' : 'var(--text-muted)', background: activeTab === 'practice' ? 'var(--surface)' : 'transparent', textDecoration: 'none', transition: 'all 0.15s ease' }}>
+                                Practice
                             </Link>
                         </>
                     )}
@@ -225,6 +228,9 @@ const Navbar: React.FC<NavbarProps> = ({ activeTab = 'dashboard', overlay = fals
                             </Link>
                             <Link to="/progress" onClick={() => setMobileOpen(false)} style={{ padding: '0.625rem 0.75rem', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 700, color: activeTab === 'progress' ? 'var(--text)' : 'var(--text-muted)', background: activeTab === 'progress' ? 'var(--surface)' : 'transparent', textDecoration: 'none' }}>
                                 My Progress
+                            </Link>
+                            <Link to="/practice" onClick={() => setMobileOpen(false)} style={{ padding: '0.625rem 0.75rem', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 700, color: activeTab === 'practice' ? 'var(--text)' : 'var(--text-muted)', background: activeTab === 'practice' ? 'var(--surface)' : 'transparent', textDecoration: 'none' }}>
+                                Practice
                             </Link>
                         </>
                     )}

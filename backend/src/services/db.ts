@@ -162,6 +162,7 @@ export const initDb = async () => {
             allowed_emails JSONB NOT NULL DEFAULT '[]'::jsonb,
             access_code TEXT,
             access_code_hash TEXT,
+            practice_enabled BOOLEAN NOT NULL DEFAULT FALSE,
             security_settings JSONB NOT NULL DEFAULT '{"webcam":true,"microphone":true,"tab_switch":true,"fullscreen":true,"laptop_only":false}'::jsonb,
             start_at TIMESTAMPTZ,
             end_at TIMESTAMPTZ,
@@ -189,6 +190,11 @@ export const initDb = async () => {
     await query(`
         ALTER TABLE tests
         ADD COLUMN IF NOT EXISTS allowed_emails JSONB NOT NULL DEFAULT '[]'::jsonb;
+    `);
+
+    await query(`
+        ALTER TABLE tests
+        ADD COLUMN IF NOT EXISTS practice_enabled BOOLEAN NOT NULL DEFAULT FALSE;
     `);
 
     await query(`
@@ -304,6 +310,7 @@ export const initDb = async () => {
             constraints JSONB,
             examples JSONB,
             test_cases JSONB,
+            practice_enabled BOOLEAN NOT NULL DEFAULT TRUE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
     `);
@@ -370,6 +377,35 @@ export const initDb = async () => {
             auto_submitted BOOLEAN NOT NULL DEFAULT FALSE,
             auto_submit_reason TEXT,
             submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS practice_sessions (
+            id TEXT PRIMARY KEY,
+            org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            test_id TEXT REFERENCES tests(id) ON DELETE SET NULL,
+            category TEXT,
+            answers JSONB NOT NULL DEFAULT '[]'::jsonb,
+            score NUMERIC NOT NULL DEFAULT 0,
+            total_points INTEGER NOT NULL DEFAULT 0,
+            question_count INTEGER NOT NULL DEFAULT 0,
+            started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS practice_answers (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES practice_sessions(id) ON DELETE CASCADE,
+            question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+            answer JSONB NOT NULL DEFAULT '{}'::jsonb,
+            is_correct BOOLEAN NOT NULL DEFAULT FALSE,
+            points_earned NUMERIC NOT NULL DEFAULT 0,
+            time_spent_seconds INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
     `);
 
@@ -511,6 +547,11 @@ export const initDb = async () => {
 
     await query(`
         ALTER TABLE questions
+        ADD COLUMN IF NOT EXISTS practice_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+    `);
+
+    await query(`
+        ALTER TABLE questions
         ADD COLUMN IF NOT EXISTS accepted_answers JSONB;
     `);
 
@@ -571,8 +612,10 @@ export const initDb = async () => {
     await query('CREATE INDEX IF NOT EXISTS idx_org_members_user_id ON org_members(user_id);');
     await query('CREATE INDEX IF NOT EXISTS idx_org_members_org_id ON org_members(org_id);');
     await query('CREATE INDEX IF NOT EXISTS idx_tests_org_id ON tests(org_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_tests_practice_enabled ON tests(org_id, practice_enabled) WHERE practice_enabled = TRUE;');
     await query('CREATE UNIQUE INDEX IF NOT EXISTS idx_tests_access_code_unique ON tests(access_code) WHERE access_code IS NOT NULL;');
     await query('CREATE INDEX IF NOT EXISTS idx_questions_test_id ON questions(test_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_questions_practice_enabled ON questions(test_id, practice_enabled) WHERE practice_enabled = TRUE;');
     await query('CREATE INDEX IF NOT EXISTS idx_test_attempts_test_student ON test_attempts(test_id, student_id);');
     await query('CREATE INDEX IF NOT EXISTS idx_test_attempts_status ON test_attempts(status);');
     await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_test_attempts_active_unique ON test_attempts (test_id, student_id) WHERE status = 'active';`);
@@ -628,6 +671,9 @@ export const initDb = async () => {
     await query('CREATE INDEX IF NOT EXISTS idx_interview_participants_interview_id ON interview_participants(interview_id);');
     await query('CREATE INDEX IF NOT EXISTS idx_interview_signals_interview_id_created_at ON interview_signals(interview_id, created_at);');
     await query('CREATE INDEX IF NOT EXISTS idx_interview_signals_target_client_id ON interview_signals(target_client_id);');
+    await query('CREATE INDEX IF NOT EXISTS idx_practice_sessions_student_completed ON practice_sessions(student_id, completed_at DESC);');
+    await query('CREATE INDEX IF NOT EXISTS idx_practice_sessions_org_completed ON practice_sessions(org_id, completed_at DESC);');
+    await query('CREATE INDEX IF NOT EXISTS idx_practice_answers_session_id ON practice_answers(session_id);');
 };
 
 export const closeDb = async () => {

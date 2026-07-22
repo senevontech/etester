@@ -1318,6 +1318,8 @@ const TestEditor: React.FC = () => {
     const [negativeMessage, setNegativeMessage] = useState('');
     const [answerRevealStatus, setAnswerRevealStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
     const [answerRevealMessage, setAnswerRevealMessage] = useState('');
+    const [practiceStatus, setPracticeStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const [practiceMessage, setPracticeMessage] = useState('');
     const [negativeEnabledDraft, setNegativeEnabledDraft] = useState(false);
     const [negativeValueDraft, setNegativeValueDraft] = useState('1');
 
@@ -1460,6 +1462,24 @@ const TestEditor: React.FC = () => {
         } catch (error) {
             setAnswerRevealStatus('error');
             setAnswerRevealMessage(error instanceof Error ? error.message : 'Could not update answer reveal.');
+        }
+    };
+
+    const togglePracticeMode = async () => {
+        if (!test) return;
+
+        const nextEnabled = !test.practiceEnabled;
+        setPracticeStatus('saving');
+        setPracticeMessage(nextEnabled ? 'Enabling student practice...' : 'Disabling student practice...');
+
+        try {
+            await updateTest(test.id, { practiceEnabled: nextEnabled });
+            setPracticeStatus('saved');
+            setPracticeMessage(nextEnabled ? 'Students can now practice these questions.' : 'Practice access disabled for this test.');
+            window.setTimeout(() => setPracticeStatus('idle'), 2000);
+        } catch (error) {
+            setPracticeStatus('error');
+            setPracticeMessage(error instanceof Error ? error.message : 'Could not update practice mode.');
         }
     };
 
@@ -1641,6 +1661,29 @@ const TestEditor: React.FC = () => {
                                 {answerRevealStatus !== 'idle' && (
                                     <p className="t-small" style={{ color: answerRevealStatus === 'error' ? 'var(--danger)' : answerRevealStatus === 'saved' ? 'var(--success)' : 'var(--text-muted)', marginTop: '0.6rem', fontWeight: 800 }}>
                                         {answerRevealMessage}
+                                    </p>
+                                )}
+                            </div>
+                            <div style={{ padding: '0.75rem', border: '1px solid var(--border)', background: 'var(--bg-subtle)' }}>
+                                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <p className="label" style={{ marginBottom: '0.25rem' }}>Student Practice</p>
+                                        <p className="t-small" style={{ color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                                            Make this test's questions available in student practice. Practice attempts are saved separately from official submissions.
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className={`btn btn-sm ${test.practiceEnabled ? 'btn-primary' : 'btn-outline'}`}
+                                        onClick={() => void togglePracticeMode()}
+                                        disabled={practiceStatus === 'saving'}
+                                    >
+                                        {test.practiceEnabled ? 'Disable' : 'Enable'}
+                                    </button>
+                                </div>
+                                {practiceStatus !== 'idle' && (
+                                    <p className="t-small" style={{ color: practiceStatus === 'error' ? 'var(--danger)' : practiceStatus === 'saved' ? 'var(--success)' : 'var(--text-muted)', marginTop: '0.6rem', fontWeight: 800 }}>
+                                        {practiceMessage}
                                     </p>
                                 )}
                             </div>
